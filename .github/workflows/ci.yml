@@ -29,6 +29,18 @@ jobs:
           plutil -lint app/Resources/zh-Hans.lproj/InfoPlist.strings
           plutil -lint mic/driver/Info.plist mic/driver/CaptureTest-Info.plist
           plutil -lint mic/captured/com.deanxi.siriremote.capture.plist
+      - name: Compile installer process verifier
+        run: |
+          xcrun clang -O2 -Wall -Wextra -Werror \
+            -mmacosx-version-min=13.0 dist/process_verifier.c \
+            -o "$RUNNER_TEMP/SiriRemoteProcessVerifier"
+      - name: Validate privileged rollback policy
+        run: |
+          ! grep -F '/private/var/tmp/com.deanxi.siriremote.install-backup' \
+            dist/pkg/preinstall dist/pkg/postinstall
+          grep -F 'mktemp -d "$INSTALL_STATE/backup.XXXXXX"' dist/pkg/preinstall
+          grep -F 'load_backup_state' dist/pkg/postinstall
+          grep -F 'validate_restored_components' dist/pkg/postinstall
 
   core:
     name: Core engine (SwiftPM tests)
@@ -50,6 +62,15 @@ jobs:
       - name: Build pinned Opus and run decoder self-test
         working-directory: mic
         run: ./build-test.sh
+
+  capture:
+    name: Capture service
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run policy tests and compile unsigned CI binary
+        working-directory: mic/captured
+        run: SIRIREMOTE_COMPILE_ONLY=1 ./build.sh
 
   app:
     name: App (compiles and links)

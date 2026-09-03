@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let text = try String(contentsOf: ConfigStore.path, encoding: .utf8)
             let config = try ConfigStore.loadAndValidate(text)
+            ConfigStore.clearLoadError()
             settingsModel?.replaceConfigFromDisk(config)
             apply(config, isReload: true)
         } catch {

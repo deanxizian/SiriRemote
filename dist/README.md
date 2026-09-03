@@ -26,3 +26,19 @@ deletes PacketLogger, SiriRemoteForge, remote-mic-app, `MiRemoteV 2ch` or other 
 The App, Capture service, router and HAL are code-signed. The PKG itself is intentionally unsigned
 until a Developer ID Installer certificate is available, so this is a local package rather than a
 notarized public release.
+
+PacketLogger is not included in either package. At runtime the root Capture service copies the
+user-installed Apple bundle into the protected SiriRemote support directory, validates its Apple
+signature and fixed identifiers, strips inherited ACLs and executes only that root-owned snapshot.
+The service compares the signed identity of both the outer App and its command-line component and
+atomically refreshes the snapshot after a valid Apple PacketLogger update.
+The uninstaller removes the snapshot with the rest of the SiriRemote support directory.
+
+After installation or rollback, the package uses a signed native verifier to confirm that exactly
+one UI process is running with the console user's UID and the kernel-reported executable path
+`/Applications/SiriRemote.app/Contents/MacOS/SiriRemote`.
+
+Upgrade rollback data is stored in a random, root-owned `0700` directory below
+`/private/var/run/com.deanxi.siriremote-installer/`. Before a rollback is activated, the installer
+revalidates the App, HAL, Capture service and router signatures, checks the LaunchDaemon's fixed
+label and executable path, and rejects writable or symlinked privileged components.

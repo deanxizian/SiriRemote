@@ -12,6 +12,7 @@ Run the portable checks before submitting a pull request:
 swift test --package-path SiriRemoteCore
 (cd app && ./build.sh && ./SiriRemote --verify-config)
 (cd mic && ./build-test.sh)
+(cd mic/captured && SIRIREMOTE_COMPILE_ONLY=1 ./build.sh)
 ```
 
 The App build links Apple's private `MultitouchSupport.framework`, so it must run on macOS. Hardware

@@ -74,6 +74,10 @@ enum ConfigStore {
         }
     }
 
+    static func clearLoadError() {
+        lastLoadError = nil
+    }
+
     static func save(_ config: Config) throws {
         let serialized = try ConfigWriter.serialize(config)
         _ = try ConfigLoader.load(serialized)

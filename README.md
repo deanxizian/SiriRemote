@@ -177,6 +177,10 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 - 断连、睡眠、PacketLogger 或路由器异常、权限丢失和应用退出都会使当前语音 generation
   失效，并关闭采集 demand。
 - Capture 服务只执行固定的 SiriRemote 工作流，不接受调用方提供任意命令、UID 或路径。
+- Capture 服务不会以 root 直接执行用户可写的 `/Applications/PacketLogger.app`。它只在本机
+  创建 root 拥有的工作副本，移除来源 ACL，并在每次启动采集前验证 Apple 签名、
+  Bundle ID、文件所有权和写权限；Apple 更新原版后会按 App 与命令行组件的签名身份自动
+  刷新工作副本，验证失败时拒绝启动语音采集。
 - 语音采集的临时文件位于 `/private/var/run/com.deanxi.siriremote/`，会在会话结束后清理。
 
 ## 常见问题
@@ -265,7 +269,7 @@ SHA256SUMS.txt
 2. 使用稳定身份 `Developer ID Application: ZIAN XI (96M7FW2XLU)` 签名。
 3. 拒绝 ad-hoc 签名或签名校验失败的 bundle。
 4. 通过 Installer 替换 `/Applications/SiriRemote.app`。
-5. 启动并确认系统中只有一个来自该路径的 SiriRemote UI 进程。
+5. 通过内核报告的进程路径和 UID，确认系统中只有一个来自该路径的 SiriRemote UI 进程。
 
 实时测试只使用 `/Applications/SiriRemote.app`，不要直接运行 `app/SiriRemote.app` 或其他
 项目内 bundle，以免 TCC 权限、进程状态和实际测试版本不一致。

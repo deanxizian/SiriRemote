@@ -9,6 +9,7 @@ SUPPORT="/Library/Application Support/SiriRemote"
 PLIST="/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
 LOG_DIR="/Library/Logs/SiriRemote"
 RUNTIME_DIR="/private/var/run/com.deanxi.siriremote"
+INSTALL_STATE="/private/var/run/com.deanxi.siriremote-installer"
 DEBUG_DOMAIN="/Library/Preferences/com.apple.MobileBluetooth.debug"
 DEBUG_PLIST="${DEBUG_DOMAIN}.plist"
 DEBUG_BACKUP="$SUPPORT/preinstall-HCITraces.plist"
@@ -27,7 +28,7 @@ elif [ -f "$DEBUG_ABSENT" ]; then
 fi
 
 /bin/rm -f "$PLIST"
-/bin/rm -rf "$APP" "$DRIVER" "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR"
+/bin/rm -rf "$APP" "$DRIVER" "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$INSTALL_STATE"
 
 console_user="$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || true)"
 if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ "$console_user" != "loginwindow" ]; then

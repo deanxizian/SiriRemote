@@ -30,6 +30,9 @@
 #include <sys/wait.h>
 #include <notify.h>
 #include <dispatch/dispatch.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
+#include <limits.h>
 
 #include "srm_capture_demand.h"
 #include "srm_runtime_directory.h"
@@ -44,8 +47,14 @@ extern char **environ;
 #define RUNTIME_DIR   "/private/var/run/com.deanxi.siriremote"
 #define PKLG_PATH     RUNTIME_DIR "/capture.pklg"
 #define READY_PATH    RUNTIME_DIR "/capture-service-ready"
-#define PACKETLOGGER  "/Applications/PacketLogger.app/Contents/Resources/packetlogger"
-#define ROUTER_PATH   "/Library/Application Support/SiriRemote/SiriRemoteAudioRouter"
+#define SUPPORT_DIR   "/Library/Application Support/SiriRemote"
+#define PACKETLOGGER_SOURCE_APP "/Applications/PacketLogger.app"
+#define PACKETLOGGER_SOURCE_EXEC \
+    PACKETLOGGER_SOURCE_APP "/Contents/Resources/packetlogger"
+#define PACKETLOGGER_APP SUPPORT_DIR "/PacketLogger.app"
+#define PACKETLOGGER_PENDING_APP SUPPORT_DIR "/.PacketLogger.pending"
+#define PACKETLOGGER  PACKETLOGGER_APP "/Contents/Resources/packetlogger"
+#define ROUTER_PATH   SUPPORT_DIR "/SiriRemoteAudioRouter"
 #define BT_DEBUG_DOMAIN "/Library/Preferences/com.apple.MobileBluetooth.debug"
 
 #define RESTART_BACKOFF_SECONDS 1
@@ -122,9 +131,275 @@ static void spawn_and_wait(const char *path, char *const argv[])
     if (pid > 0) waitpid(pid, NULL, 0);
 }
 
+static int spawn_and_wait_checked(const char *path, char *const argv[])
+{
+    pid_t pid = spawn_child(path, argv);
+    if (pid <= 0) return 0;
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
+        logmsg("wait for %s failed: %s", path, strerror(errno));
+        return 0;
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        logmsg("%s exited unsuccessfully (status=%d)", path, status);
+        return 0;
+    }
+    return 1;
+}
+
+static int secure_root_owned_path(const char *path, int directory)
+{
+    struct stat metadata;
+    if (lstat(path, &metadata) != 0) return 0;
+    if (directory ? !S_ISDIR(metadata.st_mode) : !S_ISREG(metadata.st_mode)) return 0;
+    return metadata.st_uid == 0 && (metadata.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+}
+
+static SecStaticCodeRef copy_validated_apple_code(const char *path,
+                                                  CFStringRef requirement_text,
+                                                  SecCSFlags extra_flags)
+{
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(
+        kCFAllocatorDefault, (const UInt8 *)path, (CFIndex)strlen(path), false
+    );
+    if (url == NULL) return NULL;
+
+    SecStaticCodeRef code = NULL;
+    SecRequirementRef requirement = NULL;
+    OSStatus result = SecStaticCodeCreateWithPath(url, kSecCSDefaultFlags, &code);
+    if (result == errSecSuccess) {
+        result = SecRequirementCreateWithString(
+            requirement_text, kSecCSDefaultFlags, &requirement
+        );
+    }
+    if (result == errSecSuccess) {
+        SecCSFlags flags = kSecCSCheckAllArchitectures | kSecCSStrictValidate
+            | kSecCSRestrictSymlinks | kSecCSRestrictSidebandData | extra_flags;
+        result = SecStaticCodeCheckValidity(code, flags, requirement);
+    }
+
+    if (requirement != NULL) CFRelease(requirement);
+    CFRelease(url);
+    if (result != errSecSuccess) {
+        logmsg("Apple code-signature validation failed for %s (OSStatus=%d)",
+               path, (int)result);
+        if (code != NULL) CFRelease(code);
+        return NULL;
+    }
+    return code;
+}
+
+// kSecCodeInfoUnique is the CDHash selected by macOS for this exact signed code. Unlike the stable
+// signing identifier, it changes when Apple ships a new PacketLogger binary. Comparing both the App
+// and its packetlogger CLI lets the daemon refresh its protected copy without trusting mutable
+// version strings or timestamps from /Applications.
+static CFDataRef copy_validated_code_hash(const char *path, CFStringRef requirement_text,
+                                          SecCSFlags extra_flags)
+{
+    SecStaticCodeRef code = copy_validated_apple_code(path, requirement_text, extra_flags);
+    if (code == NULL) return NULL;
+
+    CFDictionaryRef information = NULL;
+    OSStatus result = SecCodeCopySigningInformation(
+        code, kSecCSDefaultFlags, &information
+    );
+    CFDataRef identity = NULL;
+    if (result == errSecSuccess && information != NULL) {
+        CFTypeRef value = CFDictionaryGetValue(information, kSecCodeInfoUnique);
+        if (value != NULL && CFGetTypeID(value) == CFDataGetTypeID()) {
+            identity = CFDataCreateCopy(kCFAllocatorDefault, (CFDataRef)value);
+        }
+    }
+    if (information != NULL) CFRelease(information);
+    CFRelease(code);
+
+    if (identity == NULL) {
+        logmsg("cannot read validated code identity for %s (OSStatus=%d)",
+               path, (int)result);
+    }
+    return identity;
+}
+
+typedef struct {
+    CFDataRef app;
+    CFDataRef executable;
+} PacketLoggerCodeIdentity;
+
+static void release_packetlogger_identity(PacketLoggerCodeIdentity *identity)
+{
+    if (identity->app != NULL) CFRelease(identity->app);
+    if (identity->executable != NULL) CFRelease(identity->executable);
+    identity->app = NULL;
+    identity->executable = NULL;
+}
+
+static int copy_packetlogger_identity(const char *app_path, int require_protected_copy,
+                                      PacketLoggerCodeIdentity *identity)
+{
+    identity->app = NULL;
+    identity->executable = NULL;
+    if (access(app_path, F_OK) != 0) return 0;
+
+    char executable[PATH_MAX];
+    int length = snprintf(executable, sizeof executable,
+                          "%s/Contents/Resources/packetlogger", app_path);
+    if (length <= 0 || (size_t)length >= sizeof executable) return 0;
+    if (require_protected_copy
+        && (!secure_root_owned_path(SUPPORT_DIR, 1)
+            || !secure_root_owned_path(app_path, 1)
+            || !secure_root_owned_path(executable, 0))) {
+        logmsg("PacketLogger protected snapshot has unsafe ownership or permissions");
+        return 0;
+    }
+
+    identity->app = copy_validated_code_hash(
+        app_path,
+        CFSTR("anchor apple and identifier \"com.apple.PacketLogger\""),
+        kSecCSCheckNestedCode
+    );
+    if (identity->app != NULL) {
+        identity->executable = copy_validated_code_hash(
+            executable,
+            CFSTR("anchor apple and identifier \"com.apple.packetlogger\""),
+            kSecCSDefaultFlags
+        );
+    }
+    if (identity->app == NULL || identity->executable == NULL) {
+        release_packetlogger_identity(identity);
+        return 0;
+    }
+    return 1;
+}
+
+static int packetlogger_identities_match(const PacketLoggerCodeIdentity *left,
+                                         const PacketLoggerCodeIdentity *right)
+{
+    return CFEqual(left->app, right->app)
+        && CFEqual(left->executable, right->executable);
+}
+
+static int packetlogger_source_matches_snapshot(int *source_valid, int *snapshot_valid)
+{
+    PacketLoggerCodeIdentity source_identity = { NULL, NULL };
+    PacketLoggerCodeIdentity snapshot_identity = { NULL, NULL };
+    *source_valid = copy_packetlogger_identity(
+        PACKETLOGGER_SOURCE_APP, 0, &source_identity
+    );
+    *snapshot_valid = copy_packetlogger_identity(
+        PACKETLOGGER_APP, 1, &snapshot_identity
+    );
+    int matches = *source_valid && *snapshot_valid
+        && packetlogger_identities_match(&source_identity, &snapshot_identity);
+    release_packetlogger_identity(&source_identity);
+    release_packetlogger_identity(&snapshot_identity);
+    return matches;
+}
+
+static int packetlogger_snapshot_is_trusted(const char *app_path)
+{
+    PacketLoggerCodeIdentity identity = { NULL, NULL };
+    int trusted = copy_packetlogger_identity(app_path, 1, &identity);
+    release_packetlogger_identity(&identity);
+    return trusted;
+}
+
+static void remove_packetlogger_tree(const char *path)
+{
+    char *arguments[] = { "rm", "-rf", (char *)path, NULL };
+    (void)spawn_and_wait_checked("/bin/rm", arguments);
+}
+
+// PacketLogger is normally dragged into /Applications and therefore remains user-owned. A root
+// daemon must never execute it from that writable location. Copy the fixed Apple-signed bundle to
+// the root-owned SiriRemote support directory, strip write access for group/other, validate every
+// architecture and nested component, then atomically publish that immutable local snapshot.
+static int install_packetlogger_snapshot(void)
+{
+    if (access(PACKETLOGGER_SOURCE_EXEC, R_OK) != 0) return 0;
+    if (!secure_root_owned_path(SUPPORT_DIR, 1)) {
+        logmsg("refusing PacketLogger snapshot: %s is not a protected root-owned directory",
+               SUPPORT_DIR);
+        return 0;
+    }
+
+    remove_packetlogger_tree(PACKETLOGGER_PENDING_APP);
+    char *copy_arguments[] = {
+        "ditto", "--noacl", "--noextattr", "--noqtn",
+        PACKETLOGGER_SOURCE_APP, PACKETLOGGER_PENDING_APP, NULL
+    };
+    char *owner_arguments[] = {
+        "chown", "-R", "-P", "root:wheel", PACKETLOGGER_PENDING_APP, NULL
+    };
+    char *acl_arguments[] = {
+        "chmod", "-RN", PACKETLOGGER_PENDING_APP, NULL
+    };
+    char *mode_arguments[] = {
+        "chmod", "-R", "-P", "go-w", PACKETLOGGER_PENDING_APP, NULL
+    };
+    if (!spawn_and_wait_checked("/usr/bin/ditto", copy_arguments)
+        || !spawn_and_wait_checked("/usr/sbin/chown", owner_arguments)
+        || !spawn_and_wait_checked("/bin/chmod", acl_arguments)
+        || !spawn_and_wait_checked("/bin/chmod", mode_arguments)
+        || !packetlogger_snapshot_is_trusted(PACKETLOGGER_PENDING_APP)) {
+        remove_packetlogger_tree(PACKETLOGGER_PENDING_APP);
+        logmsg("refusing untrusted PacketLogger installation");
+        return 0;
+    }
+
+    remove_packetlogger_tree(PACKETLOGGER_APP);
+    if (rename(PACKETLOGGER_PENDING_APP, PACKETLOGGER_APP) != 0) {
+        logmsg("cannot publish protected PacketLogger snapshot: %s", strerror(errno));
+        remove_packetlogger_tree(PACKETLOGGER_PENDING_APP);
+        return 0;
+    }
+    int source_valid = 0;
+    int snapshot_valid = 0;
+    if (!packetlogger_source_matches_snapshot(&source_valid, &snapshot_valid)) {
+        logmsg("PacketLogger source changed while creating its protected snapshot");
+        remove_packetlogger_tree(PACKETLOGGER_APP);
+        return 0;
+    }
+    logmsg("installed protected Apple-signed PacketLogger snapshot");
+    return 1;
+}
+
 static int packetlogger_available(void)
 {
-    return access(PACKETLOGGER, X_OK) == 0;
+    if (access(PACKETLOGGER_SOURCE_EXEC, R_OK) != 0) {
+        remove_packetlogger_tree(PACKETLOGGER_APP);
+        return 0;
+    }
+
+    int source_valid = 0;
+    int snapshot_valid = 0;
+    int matches_source = packetlogger_source_matches_snapshot(
+        &source_valid, &snapshot_valid
+    );
+
+    if (!source_valid) {
+        logmsg("refusing untrusted PacketLogger source; removing protected snapshot");
+        remove_packetlogger_tree(PACKETLOGGER_APP);
+        return 0;
+    }
+    if (matches_source) return 1;
+    if (snapshot_valid) {
+        logmsg("Apple PacketLogger changed; refreshing protected snapshot");
+    }
+    remove_packetlogger_tree(PACKETLOGGER_APP);
+    return install_packetlogger_snapshot();
+}
+
+// Validate again immediately before each privileged execution. The snapshot and all of its parent
+// directories are root-owned and non-writable to users, so the successful result remains valid
+// between this check and posix_spawn.
+static pid_t spawn_packetlogger(char *const argv[])
+{
+    if (!packetlogger_snapshot_is_trusted(PACKETLOGGER_APP)) {
+        logmsg("refusing to execute an untrusted PacketLogger snapshot");
+        return -1;
+    }
+    return spawn_child(PACKETLOGGER, argv);
 }
 
 static void stop_pipeline(void);
@@ -163,7 +438,7 @@ static void prewarm_packetlogger(void)
     (void)chmod(RUNTIME_DIR, 0700);
     unlink(warm);
     char *plargs[] = { "packetlogger", "convert", "-o", (char *)warm, NULL };
-    pid_t pid = spawn_child(PACKETLOGGER, plargs);
+    pid_t pid = spawn_packetlogger(plargs);
     if (pid <= 0) return;
     off_t observed_size = 0;
     for (int i = 0; i < 200; ++i) {
@@ -204,7 +479,7 @@ static void start_pipeline(void)
     (void)chmod(RUNTIME_DIR, 0700);
     unlink(PKLG_PATH);
     char *plargs[] = { "packetlogger", "convert", "-o", PKLG_PATH, NULL };
-    g_packetlogger = spawn_child(PACKETLOGGER, plargs);
+    g_packetlogger = spawn_packetlogger(plargs);
     if (g_packetlogger < 0) { g_pipeline_up = 0; return; }
 
     // A created-but-empty file only proves that open(2) succeeded. Do not tell the App capture is

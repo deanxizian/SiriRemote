@@ -25,12 +25,14 @@ ROUTER="$SUPPORT/SiriRemoteAudioRouter"
 LAUNCHD="$PAYLOAD/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
 PACKAGE_INFO="$AUDIT_DIR/full/PackageInfo"
 WATCHDOG="$AUDIT_DIR/full/Scripts/SiriRemoteCoreAudioWatchdog"
+PROCESS_VERIFIER="$AUDIT_DIR/full/Scripts/SiriRemoteProcessVerifier"
 EN_INFO_STRINGS="$APP/Contents/Resources/en.lproj/InfoPlist.strings"
 ZH_INFO_STRINGS="$APP/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"
 
 for required in "$APP" "$DRIVER" "$CAPTURE" "$ROUTER" "$LAUNCHD" \
     "$EN_INFO_STRINGS" "$ZH_INFO_STRINGS" \
     "$AUDIT_DIR/full/Scripts/preinstall" "$AUDIT_DIR/full/Scripts/postinstall" "$WATCHDOG" \
+    "$PROCESS_VERIFIER" \
     "$AUDIT_DIR/uninstall/Scripts/postinstall" \
     "$AUDIT_DIR/uninstall/Scripts/SiriRemoteShmCleanup"; do
     [ -e "$required" ] || { echo "package is missing $required" >&2; exit 1; }
@@ -44,6 +46,46 @@ done
 /usr/bin/grep -Fq 'SiriRemoteCoreAudioWatchdog' "$AUDIT_DIR/full/Scripts/postinstall"
 if /usr/bin/grep -Fq 'cpu_seconds_for_pids' "$AUDIT_DIR/full/Scripts/postinstall"; then
     echo "package still contains the blocking shell CPU sampler" >&2
+    exit 1
+fi
+if /usr/bin/grep -Eq 'chown -R root:wheel "\$SUPPORT"|chmod -RN "\$SUPPORT"' \
+    "$AUDIT_DIR/full/Scripts/postinstall"; then
+    echo "postinstall must not recursively rewrite the protected PacketLogger snapshot" >&2
+    exit 1
+fi
+/usr/bin/grep -Fq 'stop_siriremote_processes' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'requires a logged-in console user' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'verify_expected_signature "$APP" com.deanxi.siriremote' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'Developer ID Application: ZIAN XI (96M7FW2XLU)' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'verify_single_live_app "$console_uid"' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'Never leave a duplicate, wrong-UID or wrong-path input process alive' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+if /usr/bin/grep -Fq '/private/var/tmp/com.deanxi.siriremote.install-backup' \
+    "$AUDIT_DIR/full/Scripts/preinstall" "$AUDIT_DIR/full/Scripts/postinstall"; then
+    echo "installer still uses the attacker-writable fixed rollback path" >&2
+    exit 1
+fi
+/usr/bin/grep -Fq 'INSTALL_STATE="/private/var/run/com.deanxi.siriremote-installer"' \
+    "$AUDIT_DIR/full/Scripts/preinstall"
+/usr/bin/grep -Fq 'mktemp -d "$INSTALL_STATE/backup.XXXXXX"' \
+    "$AUDIT_DIR/full/Scripts/preinstall"
+/usr/bin/grep -Fq 'run_parent_mode_value & 0002' \
+    "$AUDIT_DIR/full/Scripts/preinstall"
+/usr/bin/grep -Fq 'load_backup_state' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'validate_restored_components' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'verify_launchdaemon' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'plutil -extract ProgramArguments raw' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'EnvironmentVariables UserName GroupName' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'refusing to activate an invalid SiriRemote rollback' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+if /usr/bin/grep -Fq 'ps -p "$app_pids" -o command=' \
+    "$AUDIT_DIR/full/Scripts/postinstall"; then
+    echo "postinstall must verify the kernel process path, not mutable argv" >&2
     exit 1
 fi
 "$WATCHDOG" --self-test
@@ -97,6 +139,17 @@ assert_signature "$DRIVER" com.deanxi.siriremote.audio.driver required
 assert_signature "$CAPTURE" SiriRemoteCapture required
 assert_signature "$ROUTER" SiriRemoteAudioRouter required
 assert_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog required
+assert_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier required
+
+/bin/sleep 1 &
+verifier_test_pid=$!
+if ! "$PROCESS_VERIFIER" "$verifier_test_pid" "$(/usr/bin/id -u)" /bin/sleep; then
+    /bin/kill "$verifier_test_pid" 2>/dev/null || true
+    wait "$verifier_test_pid" 2>/dev/null || true
+    echo "native process identity verification failed" >&2
+    exit 1
+fi
+wait "$verifier_test_pid"
 
 # Runtime voice switching must never enable a third-party input method. TISEnableInputSource is an
 # onboarding API and causes macOS to display an authorization dialog from the Siri-button path.
