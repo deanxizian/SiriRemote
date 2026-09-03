@@ -89,13 +89,18 @@ done
 xcrun clang -O2 -Wall -Wextra -Werror \
     -mmacosx-version-min="$MACOS_MIN" "$ROOT/dist/coreaudio_watchdog.c" \
     -o "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog"
+xcrun clang -O2 -Wall -Wextra -Werror \
+    -mmacosx-version-min="$MACOS_MIN" "$ROOT/dist/process_verifier.c" \
+    -o "$FULL_SCRIPTS/SiriRemoteProcessVerifier"
 "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog" --self-test
 /usr/bin/codesign --force --options runtime --timestamp=none \
     --sign "$INSTALLER_HELPER_SIGN_IDENTITY" "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog"
+/usr/bin/codesign --force --options runtime --timestamp=none \
+    --sign "$INSTALLER_HELPER_SIGN_IDENTITY" "$FULL_SCRIPTS/SiriRemoteProcessVerifier"
 xcrun clang -O2 -Wall -Wextra -Werror "$ROOT/dist/shm_cleanup.c" \
     -o "$UNINSTALL_SCRIPTS/SiriRemoteShmCleanup"
 /bin/chmod 755 "$FULL_SCRIPTS/preinstall" "$FULL_SCRIPTS/postinstall" \
-    "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog" \
+    "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog" "$FULL_SCRIPTS/SiriRemoteProcessVerifier" \
     "$UNINSTALL_SCRIPTS/postinstall" "$UNINSTALL_SCRIPTS/SiriRemoteShmCleanup"
 
 /usr/bin/pkgbuild --root "$FULL_ROOT" --scripts "$FULL_SCRIPTS" \

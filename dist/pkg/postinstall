@@ -16,6 +16,7 @@ WATCH_WARMUP_SECONDS=3
 WATCH_SECONDS=8
 SCRIPT_DIR="$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && pwd)"
 WATCHDOG="$SCRIPT_DIR/SiriRemoteCoreAudioWatchdog"
+PROCESS_VERIFIER="$SCRIPT_DIR/SiriRemoteProcessVerifier"
 CAPTURE="$SUPPORT/SiriRemoteCapture"
 ROUTER="$SUPPORT/SiriRemoteAudioRouter"
 LEGAL="$SUPPORT/Legal"
@@ -82,9 +83,11 @@ restore_previous() {
     if [ -f "$BACKUP/had-app" ] && [ "$restored_uid" -gt 0 ]; then
         if ! verify_expected_signature "$APP" com.deanxi.siriremote; then
             echo "Warning: the previous SiriRemote App was restored but has an invalid identity" >&2
+        elif ! verify_expected_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier; then
+            echo "Warning: the process verifier has an invalid identity" >&2
         elif ! /bin/launchctl asuser "$restored_uid" \
                 /usr/bin/open -n "$APP" --args --settings >/dev/null 2>&1 \
-            || ! verify_single_live_app; then
+            || ! verify_single_live_app "$restored_uid"; then
             echo "Warning: the previous SiriRemote App was restored but could not be relaunched" >&2
         fi
     fi
@@ -92,16 +95,14 @@ restore_previous() {
 
 verify_single_live_app() {
     expected_binary="$APP/Contents/MacOS/SiriRemote"
+    expected_uid="$1"
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
              21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
         app_pids="$(/usr/bin/pgrep -x SiriRemote 2>/dev/null || true)"
         app_count="$(echo "$app_pids" | /usr/bin/awk 'NF { count++ } END { print count+0 }')"
-        if [ "$app_count" -eq 1 ]; then
-            app_command="$(/bin/ps -p "$app_pids" -o command= \
-                | /usr/bin/sed -e 's/^[[:space:]]*//')"
-            case "$app_command" in
-                "$expected_binary"|"$expected_binary "*) return 0 ;;
-            esac
+        if [ "$app_count" -eq 1 ] \
+            && "$PROCESS_VERIFIER" "$app_pids" "$expected_uid" "$expected_binary"; then
+            return 0
         fi
         /usr/bin/perl -e 'select(undef, undef, undef, 0.25)'
     done
@@ -122,6 +123,10 @@ trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; /bin/rm -rf "$BACKUP";
 }
 [ -x "$WATCHDOG" ] || {
     echo "SiriRemote CoreAudio watchdog is missing from the installer" >&2
+    false
+}
+[ -x "$PROCESS_VERIFIER" ] || {
+    echo "SiriRemote process verifier is missing from the installer" >&2
     false
 }
 console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
@@ -147,6 +152,7 @@ verify_expected_signature "$DRIVER" com.deanxi.siriremote.audio.driver
 verify_expected_signature "$CAPTURE" SiriRemoteCapture
 verify_expected_signature "$ROUTER" SiriRemoteAudioRouter
 verify_expected_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog
+verify_expected_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier
 
 restart_coreaudio
 /usr/bin/perl -e 'select(undef, undef, undef, 2)'
@@ -176,7 +182,7 @@ done
 }
 stop_siriremote_processes
 /bin/launchctl asuser "$console_uid" /usr/bin/open -n "$APP" --args --settings
-verify_single_live_app
+verify_single_live_app "$console_uid"
 
 /bin/rm -rf "$BACKUP"
 trap - ERR INT TERM HUP

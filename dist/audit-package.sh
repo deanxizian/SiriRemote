@@ -25,12 +25,14 @@ ROUTER="$SUPPORT/SiriRemoteAudioRouter"
 LAUNCHD="$PAYLOAD/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
 PACKAGE_INFO="$AUDIT_DIR/full/PackageInfo"
 WATCHDOG="$AUDIT_DIR/full/Scripts/SiriRemoteCoreAudioWatchdog"
+PROCESS_VERIFIER="$AUDIT_DIR/full/Scripts/SiriRemoteProcessVerifier"
 EN_INFO_STRINGS="$APP/Contents/Resources/en.lproj/InfoPlist.strings"
 ZH_INFO_STRINGS="$APP/Contents/Resources/zh-Hans.lproj/InfoPlist.strings"
 
 for required in "$APP" "$DRIVER" "$CAPTURE" "$ROUTER" "$LAUNCHD" \
     "$EN_INFO_STRINGS" "$ZH_INFO_STRINGS" \
     "$AUDIT_DIR/full/Scripts/preinstall" "$AUDIT_DIR/full/Scripts/postinstall" "$WATCHDOG" \
+    "$PROCESS_VERIFIER" \
     "$AUDIT_DIR/uninstall/Scripts/postinstall" \
     "$AUDIT_DIR/uninstall/Scripts/SiriRemoteShmCleanup"; do
     [ -e "$required" ] || { echo "package is missing $required" >&2; exit 1; }
@@ -57,6 +59,13 @@ fi
     "$AUDIT_DIR/full/Scripts/postinstall"
 /usr/bin/grep -Fq 'Developer ID Application: ZIAN XI (96M7FW2XLU)' \
     "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'verify_single_live_app "$console_uid"' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+if /usr/bin/grep -Fq 'ps -p "$app_pids" -o command=' \
+    "$AUDIT_DIR/full/Scripts/postinstall"; then
+    echo "postinstall must verify the kernel process path, not mutable argv" >&2
+    exit 1
+fi
 "$WATCHDOG" --self-test
 
 # A relocatable App can be silently installed over a same-ID development bundle outside
@@ -108,6 +117,18 @@ assert_signature "$DRIVER" com.deanxi.siriremote.audio.driver required
 assert_signature "$CAPTURE" SiriRemoteCapture required
 assert_signature "$ROUTER" SiriRemoteAudioRouter required
 assert_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog required
+assert_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier required
+
+/bin/sleep 5 &
+verifier_test_pid=$!
+if ! "$PROCESS_VERIFIER" "$verifier_test_pid" "$(/usr/bin/id -u)" /bin/sleep; then
+    /bin/kill "$verifier_test_pid" 2>/dev/null || true
+    wait "$verifier_test_pid" 2>/dev/null || true
+    echo "native process identity verification failed" >&2
+    exit 1
+fi
+/bin/kill "$verifier_test_pid" 2>/dev/null || true
+wait "$verifier_test_pid" 2>/dev/null || true
 
 # Runtime voice switching must never enable a third-party input method. TISEnableInputSource is an
 # onboarding API and causes macOS to display an authorization dialog from the Siri-button path.

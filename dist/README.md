@@ -33,3 +33,7 @@ signature and fixed identifiers, strips inherited ACLs and executes only that ro
 The service compares the signed identity of both the outer App and its command-line component and
 atomically refreshes the snapshot after a valid Apple PacketLogger update.
 The uninstaller removes the snapshot with the rest of the SiriRemote support directory.
+
+After installation or rollback, the package uses a signed native verifier to confirm that exactly
+one UI process is running with the console user's UID and the kernel-reported executable path
+`/Applications/SiriRemote.app/Contents/MacOS/SiriRemote`.

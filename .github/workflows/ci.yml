@@ -29,6 +29,11 @@ jobs:
           plutil -lint app/Resources/zh-Hans.lproj/InfoPlist.strings
           plutil -lint mic/driver/Info.plist mic/driver/CaptureTest-Info.plist
           plutil -lint mic/captured/com.deanxi.siriremote.capture.plist
+      - name: Compile installer process verifier
+        run: |
+          xcrun clang -O2 -Wall -Wextra -Werror \
+            -mmacosx-version-min=13.0 dist/process_verifier.c \
+            -o "$RUNNER_TEMP/SiriRemoteProcessVerifier"
 
   core:
     name: Core engine (SwiftPM tests)
