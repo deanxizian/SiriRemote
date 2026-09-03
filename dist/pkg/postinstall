@@ -29,8 +29,26 @@ restart_coreaudio() {
     return 1
 }
 
+stop_siriremote_processes() {
+    /usr/bin/killall SiriRemote 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        /usr/bin/pgrep -x SiriRemote >/dev/null 2>&1 || return 0
+        /usr/bin/perl -e 'select(undef, undef, undef, 0.1)'
+    done
+    /usr/bin/killall -9 SiriRemote 2>/dev/null || true
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        /usr/bin/pgrep -x SiriRemote >/dev/null 2>&1 || return 0
+        /usr/bin/perl -e 'select(undef, undef, undef, 0.1)'
+    done
+    echo "Could not stop existing SiriRemote processes" >&2
+    return 1
+}
+
 restore_previous() {
     set +e
+    # A failed live-process check can mean a duplicate or wrong-path process survived. Stop every
+    # UI instance before replacing bundles, then prove the restored App has exactly one owner.
+    stop_siriremote_processes || true
     /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
     /bin/rm -rf "$APP" "$DRIVER" "$SUPPORT"
     /bin/rm -f "$PLIST"
@@ -45,8 +63,11 @@ restore_previous() {
     [ ! -f "$PLIST" ] || /bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
     restored_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
     if [ -f "$BACKUP/had-app" ] && [ "$restored_uid" -gt 0 ]; then
-        /bin/launchctl asuser "$restored_uid" /usr/bin/open -n "$APP" --args --settings \
-            >/dev/null 2>&1 || true
+        if ! /bin/launchctl asuser "$restored_uid" \
+                /usr/bin/open -n "$APP" --args --settings >/dev/null 2>&1 \
+            || ! verify_single_live_app; then
+            echo "Warning: the previous SiriRemote App was restored but could not be relaunched" >&2
+        fi
     fi
 }
 
@@ -82,6 +103,11 @@ trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; /bin/rm -rf "$BACKUP";
 }
 [ -x "$WATCHDOG" ] || {
     echo "SiriRemote CoreAudio watchdog is missing from the installer" >&2
+    false
+}
+console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
+[ "$console_uid" -gt 0 ] || {
+    echo "SiriRemote requires a logged-in console user for verified installation" >&2
     false
 }
 /bin/mkdir -p "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR"
@@ -128,11 +154,9 @@ done
     echo "SiriRemote Capture service did not start" >&2
     false
 }
-console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
-if [ "$console_uid" -gt 0 ]; then
-    /bin/launchctl asuser "$console_uid" /usr/bin/open -n "$APP" --args --settings
-    verify_single_live_app
-fi
+stop_siriremote_processes
+/bin/launchctl asuser "$console_uid" /usr/bin/open -n "$APP" --args --settings
+verify_single_live_app
 
 /bin/rm -rf "$BACKUP"
 trap - ERR INT TERM HUP

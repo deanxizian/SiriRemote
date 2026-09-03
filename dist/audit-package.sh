@@ -51,6 +51,8 @@ if /usr/bin/grep -Eq 'chown -R root:wheel "\$SUPPORT"|chmod -RN "\$SUPPORT"' \
     echo "postinstall must not recursively rewrite the protected PacketLogger snapshot" >&2
     exit 1
 fi
+/usr/bin/grep -Fq 'stop_siriremote_processes' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'requires a logged-in console user' "$AUDIT_DIR/full/Scripts/postinstall"
 "$WATCHDOG" --self-test
 
 # A relocatable App can be silently installed over a same-ID development bundle outside
