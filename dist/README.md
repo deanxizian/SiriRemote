@@ -12,6 +12,12 @@ Artifacts are written to `dist/out/`:
 - `SiriRemote-<version>-Complete-Uninstall.pkg`
 - `SiriRemote-<version>-SHA256SUMS.txt`
 
+To repeat the package-content and signature audit without rebuilding, pass the same version:
+
+```sh
+dist/audit-package.sh 0.1.0
+```
+
 The setup package installs only:
 
 - `/Applications/SiriRemote.app`

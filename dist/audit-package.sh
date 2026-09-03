@@ -3,12 +3,18 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="$PWD"
-FULL_PKG="${1:-$ROOT/dist/out/SiriRemote-Full-Setup.pkg}"
-UNINSTALL_PKG="${2:-$ROOT/dist/out/SiriRemote-Complete-Uninstall.pkg}"
-CHECKSUM_FILE="${3:-$ROOT/dist/out/SHA256SUMS.txt}"
+VERSION="${1:-0.1.0}"
+FULL_PKG="$ROOT/dist/out/SiriRemote-$VERSION-Full-Setup.pkg"
+UNINSTALL_PKG="$ROOT/dist/out/SiriRemote-$VERSION-Complete-Uninstall.pkg"
+CHECKSUM_FILE="$ROOT/dist/out/SiriRemote-$VERSION-SHA256SUMS.txt"
 EXPECTED_TEAM="96M7FW2XLU"
 EXPECTED_AUTHORITY="Developer ID Application: ZIAN XI (96M7FW2XLU)"
 EXPECTED_INSTALLER_AUTHORITY="Developer ID Installer: ZIAN XI (96M7FW2XLU)"
+
+[[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || {
+    echo "usage: dist/audit-package.sh [numeric-version]" >&2
+    exit 2
+}
 
 [ -f "$FULL_PKG" ] || { echo "missing package: $FULL_PKG" >&2; exit 1; }
 [ -f "$UNINSTALL_PKG" ] || { echo "missing package: $UNINSTALL_PKG" >&2; exit 1; }

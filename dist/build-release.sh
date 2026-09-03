@@ -45,8 +45,5 @@ export SIRIREMOTE_CODESIGN_TIMESTAMP=secure
 (cd mic/captured && ./build.sh)
 
 SIRIREMOTE_APP_PATH="$APP_STAGE" dist/package.sh "$VERSION"
-dist/audit-package.sh \
-    "$ROOT/dist/out/SiriRemote-$VERSION-Full-Setup.pkg" \
-    "$ROOT/dist/out/SiriRemote-$VERSION-Complete-Uninstall.pkg" \
-    "$ROOT/dist/out/SiriRemote-$VERSION-SHA256SUMS.txt"
+dist/audit-package.sh "$VERSION"
 echo "✓ SiriRemote local release build complete"
