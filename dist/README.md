@@ -23,9 +23,10 @@ The uninstall package removes those components plus SiriRemote user configuratio
 logs for the current console user. It restores the exact pre-install `HCITraces` value and never
 deletes PacketLogger, SiriRemoteForge, remote-mic-app, `MiRemoteV 2ch` or other audio devices.
 
-The App, Capture service, router and HAL are code-signed. The PKG itself is intentionally unsigned
-until a Developer ID Installer certificate is available, so this is a local package rather than a
-notarized public release.
+The App, Capture service, router and HAL are signed with the stable Developer ID Application
+identity. The outer PKG remains unsigned until a Developer ID Installer certificate is available
+and is not notarized. Release assets therefore include `unsigned` in their filenames and must be
+verified against the accompanying SHA-256 file before use.
 
 PacketLogger is not included in either package. At runtime the root Capture service copies the
 user-installed Apple bundle into the protected SiriRemote support directory, validates its Apple

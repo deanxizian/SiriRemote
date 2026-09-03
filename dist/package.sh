@@ -162,4 +162,4 @@ repack_without_appledouble "$UNINSTALL_PKG"
 
 echo "✓ $FULL_PKG"
 echo "✓ $UNINSTALL_PKG"
-echo "⚠ PKG 未签名：本机安装可用，但尚未公证，不用于公开分发。"
+echo "⚠ PKG 外层未签名且未公证；发布时必须在文件名中标注 unsigned 并附 SHA-256。"

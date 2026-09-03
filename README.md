@@ -43,7 +43,21 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 
 ### 1. 配对遥控器
 
-先在“系统设置 → 蓝牙”中配对 A2854，并确认它处于已连接状态。
+1. 先通过 USB-C 给遥控器充电，再打开“系统设置 → 蓝牙”，记住当前“附近的设备”。
+2. 将遥控器靠近 Mac，同时按住 **返回键（`<`）+ 音量加键**约 5 秒，使它进入配对状态。
+3. 观察刚刚新出现的设备并点击“连接”。A2854 在 macOS 中经常显示为一串设备序列号，
+   也可能显示为其他不明显的名称，**不一定叫 `Siri Remote`**。
+4. 连接成功后，SiriRemote 顶部会显示“已连接”。应用只接受 Apple VID `0x004C`、
+   PID `0x0315`，因此这个状态也确认了所选设备确实是 A2854。
+
+macOS 在配对前不会向蓝牙设置展示 VID/PID，因此首次选择时最可靠的线索就是“进入配对
+状态后新出现的设备”。如果没有新设备出现，可按住 **TV/控制中心键 + 音量减键**约 5 秒
+重启遥控器，等待 5–10 秒后重新执行上述步骤。遥控器若仍被附近的 Apple TV 自动连接，
+请先让它远离 Apple TV 或暂时断开 Apple TV 电源。
+
+配对和重启组合键来自
+[Apple 官方的 Siri Remote 重新连接说明](https://support.apple.com/102569)；Apple 文档以
+Apple TV 为连接目标，在这里最后一步改为从 Mac 的蓝牙设置完成连接。
 
 ### 2. 安装 PacketLogger
 
@@ -60,11 +74,25 @@ PacketLogger 是 Apple 工具，不随 SiriRemote 安装包分发。普通触控
 
 ### 3. 安装 SiriRemote
 
-双击本地构建产物：
+从项目的 [GitHub Releases](https://github.com/deanxizian/SiriRemote/releases) 下载同一版本的
+三个文件：
 
 ```text
-dist/out/SiriRemote-Full-Setup.pkg
+SiriRemote-0.1.0-Full-Setup-unsigned.pkg
+SiriRemote-0.1.0-Complete-Uninstall-unsigned.pkg
+SiriRemote-0.1.0-SHA256SUMS.txt
 ```
+
+先在下载目录核对校验和：
+
+```sh
+shasum -a 256 -c SiriRemote-0.1.0-SHA256SUMS.txt
+```
+
+确认两个 PKG 都显示 `OK` 后，再打开 Full Setup 安装包。外层 PKG 因项目目前没有
+Developer ID Installer 证书而未签名、未公证；App、Capture 服务、音频路由器和 HAL
+驱动本身均使用 `Developer ID Application: ZIAN XI (96M7FW2XLU)` 签名。只应使用本仓库
+Release 中与校验文件匹配的安装包；需要完整 Apple 分发信任链时，请暂时从源码构建。
 
 安装包会安装以下本项目组件：
 
@@ -282,7 +310,8 @@ SHA256SUMS.txt
 
 App 使用 Developer ID Application 证书签名，但为兼容私有 `MultitouchSupport.framework`
 不启用 Hardened Runtime；Capture 服务、音频路由器和 HAL 驱动启用 Hardened Runtime。
-当前 PKG 没有 Developer ID Installer 签名，因此属于本机安装包，不承诺公证或公开分发。
+当前 PKG 没有 Developer ID Installer 签名，因此 Release 资产会在文件名中明确标注
+`unsigned`，也不具备 Apple 公证安装包的分发信任链。
 
 ## 仓库结构
 
