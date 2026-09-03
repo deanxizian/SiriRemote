@@ -30,4 +30,6 @@ notarized public release.
 PacketLogger is not included in either package. At runtime the root Capture service copies the
 user-installed Apple bundle into the protected SiriRemote support directory, validates its Apple
 signature and fixed identifiers, strips inherited ACLs and executes only that root-owned snapshot.
+The service compares the signed identity of both the outer App and its command-line component and
+atomically refreshes the snapshot after a valid Apple PacketLogger update.
 The uninstaller removes the snapshot with the rest of the SiriRemote support directory.

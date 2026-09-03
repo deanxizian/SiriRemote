@@ -156,13 +156,14 @@ static int secure_root_owned_path(const char *path, int directory)
     return metadata.st_uid == 0 && (metadata.st_mode & (S_IWGRP | S_IWOTH)) == 0;
 }
 
-static int validate_apple_code(const char *path, CFStringRef requirement_text,
-                               SecCSFlags extra_flags)
+static SecStaticCodeRef copy_validated_apple_code(const char *path,
+                                                  CFStringRef requirement_text,
+                                                  SecCSFlags extra_flags)
 {
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(
         kCFAllocatorDefault, (const UInt8 *)path, (CFIndex)strlen(path), false
     );
-    if (url == NULL) return 0;
+    if (url == NULL) return NULL;
 
     SecStaticCodeRef code = NULL;
     SecRequirementRef requirement = NULL;
@@ -179,40 +180,128 @@ static int validate_apple_code(const char *path, CFStringRef requirement_text,
     }
 
     if (requirement != NULL) CFRelease(requirement);
-    if (code != NULL) CFRelease(code);
     CFRelease(url);
     if (result != errSecSuccess) {
         logmsg("Apple code-signature validation failed for %s (OSStatus=%d)",
                path, (int)result);
+        if (code != NULL) CFRelease(code);
+        return NULL;
+    }
+    return code;
+}
+
+// kSecCodeInfoUnique is the CDHash selected by macOS for this exact signed code. Unlike the stable
+// signing identifier, it changes when Apple ships a new PacketLogger binary. Comparing both the App
+// and its packetlogger CLI lets the daemon refresh its protected copy without trusting mutable
+// version strings or timestamps from /Applications.
+static CFDataRef copy_validated_code_hash(const char *path, CFStringRef requirement_text,
+                                          SecCSFlags extra_flags)
+{
+    SecStaticCodeRef code = copy_validated_apple_code(path, requirement_text, extra_flags);
+    if (code == NULL) return NULL;
+
+    CFDictionaryRef information = NULL;
+    OSStatus result = SecCodeCopySigningInformation(
+        code, kSecCSDefaultFlags, &information
+    );
+    CFDataRef identity = NULL;
+    if (result == errSecSuccess && information != NULL) {
+        CFTypeRef value = CFDictionaryGetValue(information, kSecCodeInfoUnique);
+        if (value != NULL && CFGetTypeID(value) == CFDataGetTypeID()) {
+            identity = CFDataCreateCopy(kCFAllocatorDefault, (CFDataRef)value);
+        }
+    }
+    if (information != NULL) CFRelease(information);
+    CFRelease(code);
+
+    if (identity == NULL) {
+        logmsg("cannot read validated code identity for %s (OSStatus=%d)",
+               path, (int)result);
+    }
+    return identity;
+}
+
+typedef struct {
+    CFDataRef app;
+    CFDataRef executable;
+} PacketLoggerCodeIdentity;
+
+static void release_packetlogger_identity(PacketLoggerCodeIdentity *identity)
+{
+    if (identity->app != NULL) CFRelease(identity->app);
+    if (identity->executable != NULL) CFRelease(identity->executable);
+    identity->app = NULL;
+    identity->executable = NULL;
+}
+
+static int copy_packetlogger_identity(const char *app_path, int require_protected_copy,
+                                      PacketLoggerCodeIdentity *identity)
+{
+    identity->app = NULL;
+    identity->executable = NULL;
+    if (access(app_path, F_OK) != 0) return 0;
+
+    char executable[PATH_MAX];
+    int length = snprintf(executable, sizeof executable,
+                          "%s/Contents/Resources/packetlogger", app_path);
+    if (length <= 0 || (size_t)length >= sizeof executable) return 0;
+    if (require_protected_copy
+        && (!secure_root_owned_path(SUPPORT_DIR, 1)
+            || !secure_root_owned_path(app_path, 1)
+            || !secure_root_owned_path(executable, 0))) {
+        logmsg("PacketLogger protected snapshot has unsafe ownership or permissions");
+        return 0;
+    }
+
+    identity->app = copy_validated_code_hash(
+        app_path,
+        CFSTR("anchor apple and identifier \"com.apple.PacketLogger\""),
+        kSecCSCheckNestedCode
+    );
+    if (identity->app != NULL) {
+        identity->executable = copy_validated_code_hash(
+            executable,
+            CFSTR("anchor apple and identifier \"com.apple.packetlogger\""),
+            kSecCSDefaultFlags
+        );
+    }
+    if (identity->app == NULL || identity->executable == NULL) {
+        release_packetlogger_identity(identity);
         return 0;
     }
     return 1;
 }
 
+static int packetlogger_identities_match(const PacketLoggerCodeIdentity *left,
+                                         const PacketLoggerCodeIdentity *right)
+{
+    return CFEqual(left->app, right->app)
+        && CFEqual(left->executable, right->executable);
+}
+
+static int packetlogger_source_matches_snapshot(int *source_valid, int *snapshot_valid)
+{
+    PacketLoggerCodeIdentity source_identity = { NULL, NULL };
+    PacketLoggerCodeIdentity snapshot_identity = { NULL, NULL };
+    *source_valid = copy_packetlogger_identity(
+        PACKETLOGGER_SOURCE_APP, 0, &source_identity
+    );
+    *snapshot_valid = copy_packetlogger_identity(
+        PACKETLOGGER_APP, 1, &snapshot_identity
+    );
+    int matches = *source_valid && *snapshot_valid
+        && packetlogger_identities_match(&source_identity, &snapshot_identity);
+    release_packetlogger_identity(&source_identity);
+    release_packetlogger_identity(&snapshot_identity);
+    return matches;
+}
+
 static int packetlogger_snapshot_is_trusted(const char *app_path)
 {
-    if (access(app_path, F_OK) != 0) return 0;
-    char executable[PATH_MAX];
-    int length = snprintf(executable, sizeof executable,
-                          "%s/Contents/Resources/packetlogger", app_path);
-    if (length <= 0 || (size_t)length >= sizeof executable) return 0;
-    if (!secure_root_owned_path(SUPPORT_DIR, 1)
-        || !secure_root_owned_path(app_path, 1)
-        || !secure_root_owned_path(executable, 0)) {
-        logmsg("PacketLogger protected snapshot has unsafe ownership or permissions");
-        return 0;
-    }
-    if (!validate_apple_code(
-            app_path,
-            CFSTR("anchor apple and identifier \"com.apple.PacketLogger\""),
-            kSecCSCheckNestedCode)) {
-        return 0;
-    }
-    return validate_apple_code(
-        executable,
-        CFSTR("anchor apple and identifier \"com.apple.packetlogger\""),
-        kSecCSDefaultFlags
-    );
+    PacketLoggerCodeIdentity identity = { NULL, NULL };
+    int trusted = copy_packetlogger_identity(app_path, 1, &identity);
+    release_packetlogger_identity(&identity);
+    return trusted;
 }
 
 static void remove_packetlogger_tree(const char *path)
@@ -264,7 +353,10 @@ static int install_packetlogger_snapshot(void)
         remove_packetlogger_tree(PACKETLOGGER_PENDING_APP);
         return 0;
     }
-    if (!packetlogger_snapshot_is_trusted(PACKETLOGGER_APP)) {
+    int source_valid = 0;
+    int snapshot_valid = 0;
+    if (!packetlogger_source_matches_snapshot(&source_valid, &snapshot_valid)) {
+        logmsg("PacketLogger source changed while creating its protected snapshot");
         remove_packetlogger_tree(PACKETLOGGER_APP);
         return 0;
     }
@@ -278,7 +370,22 @@ static int packetlogger_available(void)
         remove_packetlogger_tree(PACKETLOGGER_APP);
         return 0;
     }
-    if (packetlogger_snapshot_is_trusted(PACKETLOGGER_APP)) return 1;
+
+    int source_valid = 0;
+    int snapshot_valid = 0;
+    int matches_source = packetlogger_source_matches_snapshot(
+        &source_valid, &snapshot_valid
+    );
+
+    if (!source_valid) {
+        logmsg("refusing untrusted PacketLogger source; removing protected snapshot");
+        remove_packetlogger_tree(PACKETLOGGER_APP);
+        return 0;
+    }
+    if (matches_source) return 1;
+    if (snapshot_valid) {
+        logmsg("Apple PacketLogger changed; refreshing protected snapshot");
+    }
     remove_packetlogger_tree(PACKETLOGGER_APP);
     return install_packetlogger_snapshot();
 }

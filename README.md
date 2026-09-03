@@ -179,7 +179,8 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 - Capture 服务只执行固定的 SiriRemote 工作流，不接受调用方提供任意命令、UID 或路径。
 - Capture 服务不会以 root 直接执行用户可写的 `/Applications/PacketLogger.app`。它只在本机
   创建 root 拥有的工作副本，移除来源 ACL，并在每次启动采集前验证 Apple 签名、
-  Bundle ID、文件所有权和写权限；验证失败时拒绝启动语音采集。
+  Bundle ID、文件所有权和写权限；Apple 更新原版后会按 App 与命令行组件的签名身份自动
+  刷新工作副本，验证失败时拒绝启动语音采集。
 - 语音采集的临时文件位于 `/private/var/run/com.deanxi.siriremote/`，会在会话结束后清理。
 
 ## 常见问题
