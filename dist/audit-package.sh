@@ -139,7 +139,7 @@ assert_signature "$ROUTER" SiriRemoteAudioRouter required
 assert_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog required
 assert_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier required
 
-/bin/sleep 5 &
+/bin/sleep 1 &
 verifier_test_pid=$!
 if ! "$PROCESS_VERIFIER" "$verifier_test_pid" "$(/usr/bin/id -u)" /bin/sleep; then
     /bin/kill "$verifier_test_pid" 2>/dev/null || true
@@ -147,8 +147,7 @@ if ! "$PROCESS_VERIFIER" "$verifier_test_pid" "$(/usr/bin/id -u)" /bin/sleep; th
     echo "native process identity verification failed" >&2
     exit 1
 fi
-/bin/kill "$verifier_test_pid" 2>/dev/null || true
-wait "$verifier_test_pid" 2>/dev/null || true
+wait "$verifier_test_pid"
 
 # Runtime voice switching must never enable a third-party input method. TISEnableInputSource is an
 # onboarding API and causes macOS to display an authorization dialog from the Siri-button path.
