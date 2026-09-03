@@ -8,9 +8,9 @@ dist/build-release.sh 0.1.0
 
 Artifacts are written to `dist/out/`:
 
-- `SiriRemote-Full-Setup.pkg`
-- `SiriRemote-Complete-Uninstall.pkg`
-- `SHA256SUMS.txt`
+- `SiriRemote-<version>-Full-Setup.pkg`
+- `SiriRemote-<version>-Complete-Uninstall.pkg`
+- `SiriRemote-<version>-SHA256SUMS.txt`
 
 The setup package installs only:
 
@@ -24,9 +24,9 @@ logs for the current console user. It restores the exact pre-install `HCITraces`
 deletes PacketLogger, SiriRemoteForge, remote-mic-app, `MiRemoteV 2ch` or other audio devices.
 
 The App, Capture service, router and HAL are signed with the stable Developer ID Application
-identity. The outer PKG remains unsigned until a Developer ID Installer certificate is available
-and is not notarized. Release assets therefore include `unsigned` in their filenames and must be
-verified against the accompanying SHA-256 file before use.
+identity. Both PKGs are signed with the matching Developer ID Installer identity and trusted
+timestamps. They must still be verified against the accompanying SHA-256 file. A package is not
+described as notarized until Apple accepts it and the notarization ticket has been stapled.
 
 PacketLogger is not included in either package. At runtime the root Capture service copies the
 user-installed Apple bundle into the protected SiriRemote support directory, validates its Apple

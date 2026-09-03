@@ -7,6 +7,16 @@ BINARY_PATH="${SIRIREMOTE_BINARY_PATH:-SiriRemote}"
 APP_VERSION="${SIRIREMOTE_VERSION:-0.1.0}"
 BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-1}"
 SIGN_IDENTITY="${SIRIREMOTE_SIGN_IDENTITY:-Developer ID Application: ZIAN XI (96M7FW2XLU)}"
+CODE_SIGN_TIMESTAMP="${SIRIREMOTE_CODESIGN_TIMESTAMP:-none}"
+
+case "$CODE_SIGN_TIMESTAMP" in
+    none) CODE_SIGN_TIMESTAMP_ARGS=(--timestamp=none) ;;
+    secure) CODE_SIGN_TIMESTAMP_ARGS=(--timestamp) ;;
+    *)
+        echo "SIRIREMOTE_CODESIGN_TIMESTAMP must be 'none' or 'secure'" >&2
+        exit 2
+        ;;
+esac
 
 [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || {
     echo "invalid SIRIREMOTE_VERSION: $APP_VERSION" >&2
@@ -59,7 +69,7 @@ done
 /bin/chmod 755 "$APP_BUNDLE/Contents/MacOS/SiriRemote"
 # Deliberately omit --options runtime: MultitouchSupport's private callback is rejected under
 # hardened runtime on current macOS. The helper and HAL plug-in remain hardened separately.
-codesign --force --timestamp=none --entitlements SiriRemote.entitlements \
+codesign --force "${CODE_SIGN_TIMESTAMP_ARGS[@]}" --entitlements SiriRemote.entitlements \
     --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 

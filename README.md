@@ -59,8 +59,8 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 三个文件：
 
 ```text
-SiriRemote-0.1.0-Full-Setup-unsigned.pkg
-SiriRemote-0.1.0-Complete-Uninstall-unsigned.pkg
+SiriRemote-0.1.0-Full-Setup.pkg
+SiriRemote-0.1.0-Complete-Uninstall.pkg
 SiriRemote-0.1.0-SHA256SUMS.txt
 ```
 
@@ -70,8 +70,11 @@ SiriRemote-0.1.0-SHA256SUMS.txt
 shasum -a 256 -c SiriRemote-0.1.0-SHA256SUMS.txt
 ```
 
-两个 PKG 均显示 `OK` 后再安装 Full Setup。外层 PKG 未签名、未公证；包内 App、Capture
-服务、音频路由器和 HAL 驱动均使用 `Developer ID Application: ZIAN XI (96M7FW2XLU)` 签名。
+两个 PKG 均显示 `OK` 后再安装 Full Setup。PKG 使用
+`Developer ID Installer: ZIAN XI (96M7FW2XLU)` 签名；包内 App、Capture 服务、音频路由器
+和 HAL 驱动使用同一团队的 `Developer ID Application` 身份签名。当前发行包尚未完成 Apple
+公证；若 macOS 阻止打开，请在尝试打开后进入“系统设置 → 隐私与安全”，在“安全性”中
+选择“仍要打开”并完成管理员验证。不要关闭 Gatekeeper，也不要清除文件隔离属性。
 
 安装包会安装以下本项目组件：
 
@@ -228,7 +231,7 @@ pgrep -fl 'SiriRemote|packetlogger|SiriRemoteAudioRouter|SiriRemoteCapture'
 双击：
 
 ```text
-dist/out/SiriRemote-Complete-Uninstall.pkg
+dist/out/SiriRemote-0.1.0-Complete-Uninstall.pkg
 ```
 
 卸载包会删除 SiriRemote App、HAL 驱动、Capture 服务、LaunchDaemon、当前控制台用户的
@@ -250,9 +253,9 @@ dist/build-release.sh 0.1.0
 内容审计。输出位于 `dist/out/`：
 
 ```text
-SiriRemote-Full-Setup.pkg
-SiriRemote-Complete-Uninstall.pkg
-SHA256SUMS.txt
+SiriRemote-0.1.0-Full-Setup.pkg
+SiriRemote-0.1.0-Complete-Uninstall.pkg
+SiriRemote-0.1.0-SHA256SUMS.txt
 ```
 
 ### 本机开发验证
@@ -275,8 +278,8 @@ SHA256SUMS.txt
 
 App 使用 Developer ID Application 证书签名，但为兼容私有 `MultitouchSupport.framework`
 不启用 Hardened Runtime；Capture 服务、音频路由器和 HAL 驱动启用 Hardened Runtime。
-当前 PKG 没有 Developer ID Installer 签名，因此 Release 资产会在文件名中明确标注
-`unsigned`，也不具备 Apple 公证安装包的分发信任链。
+两个 PKG 使用 Developer ID Installer 证书和可信时间戳签名；在实际完成 Apple 公证与装订
+前，文档和 Release 不会将它们标记为已公证。
 
 ## 仓库结构
 

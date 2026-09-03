@@ -5,11 +5,14 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 FULL_PKG="${1:-$ROOT/dist/out/SiriRemote-Full-Setup.pkg}"
 UNINSTALL_PKG="${2:-$ROOT/dist/out/SiriRemote-Complete-Uninstall.pkg}"
+CHECKSUM_FILE="${3:-$ROOT/dist/out/SHA256SUMS.txt}"
 EXPECTED_TEAM="96M7FW2XLU"
 EXPECTED_AUTHORITY="Developer ID Application: ZIAN XI (96M7FW2XLU)"
+EXPECTED_INSTALLER_AUTHORITY="Developer ID Installer: ZIAN XI (96M7FW2XLU)"
 
 [ -f "$FULL_PKG" ] || { echo "missing package: $FULL_PKG" >&2; exit 1; }
 [ -f "$UNINSTALL_PKG" ] || { echo "missing package: $UNINSTALL_PKG" >&2; exit 1; }
+[ -f "$CHECKSUM_FILE" ] || { echo "missing checksum file: $CHECKSUM_FILE" >&2; exit 1; }
 
 AUDIT_DIR="$(/usr/bin/mktemp -d /private/tmp/siriremote-package-audit.XXXXXX)"
 trap '/bin/rm -rf "$AUDIT_DIR"' EXIT
@@ -120,6 +123,7 @@ assert_signature() {
     echo "$details" | /usr/bin/grep -Fq "Identifier=$identifier"
     echo "$details" | /usr/bin/grep -Fq "TeamIdentifier=$EXPECTED_TEAM"
     echo "$details" | /usr/bin/grep -Fq "Authority=$EXPECTED_AUTHORITY"
+    echo "$details" | /usr/bin/grep -Fq 'Timestamp='
     if echo "$details" | /usr/bin/grep -Eq 'Signature=adhoc|flags=.*adhoc'; then
         echo "ad-hoc signature found: $target" >&2
         return 1
@@ -183,16 +187,19 @@ fi
 
 for package in "$FULL_PKG" "$UNINSTALL_PKG"; do
     signature_output="$AUDIT_DIR/$(basename "$package").signature"
-    if /usr/sbin/pkgutil --check-signature "$package" >"$signature_output" 2>&1; then
-        echo "PKG unexpectedly carries an Installer signature: $package" >&2
-        exit 1
-    fi
-    /usr/bin/grep -Fq "Status: no signature" "$signature_output"
+    /usr/sbin/pkgutil --check-signature "$package" >"$signature_output" 2>&1
+    /usr/bin/grep -Fq \
+        "Status: signed by a developer certificate issued by Apple for distribution" \
+        "$signature_output"
+    /usr/bin/grep -Fq "Signed with a trusted timestamp" "$signature_output"
+    /usr/bin/grep -Fq "$EXPECTED_INSTALLER_AUTHORITY" "$signature_output"
 done
 
+CHECKSUM_DIR="$(/usr/bin/dirname "$CHECKSUM_FILE")"
+CHECKSUM_NAME="$(/usr/bin/basename "$CHECKSUM_FILE")"
 (
-    cd "$ROOT/dist/out"
-    /usr/bin/shasum -a 256 -c SHA256SUMS.txt
+    cd "$CHECKSUM_DIR"
+    /usr/bin/shasum -a 256 -c "$CHECKSUM_NAME"
 )
 
 echo "package audit: PASS"
