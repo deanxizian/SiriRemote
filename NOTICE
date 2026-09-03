@@ -1,0 +1,59 @@
+SiriRemote
+Copyright (C) 2026 SiriRemote contributors
+
+This project is distributed under GPL-3.0-only. See LICENSE.
+
+-------------------------------------------------------------------------------
+SiriRemoteForge
+-------------------------------------------------------------------------------
+
+SiriRemote is directly derived from SiriRemoteForge v0.2.0-beta.8, commit
+781a738ef3402c3c5eea5e2faa4ae53c9e4ffbc5.
+
+Copyright (C) 2026 Wenqian Zhang
+SiriRemoteForge is distributed under the GNU General Public License version 3.
+
+-------------------------------------------------------------------------------
+HyperVibe
+-------------------------------------------------------------------------------
+
+The retained HID, MultitouchSupport, pointer, media-key and menu-bar foundation
+descends from machinarii/hypervibe commit
+1e7746aabb22636df3f6410fcb2c92bb9e2217ab.
+
+MIT License
+
+Copyright (c) 2026 Jinsoo An
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+BlackHole and Opus
+-------------------------------------------------------------------------------
+
+The Siri Remote Mic AudioServerPlugIn is based on BlackHole by Existential
+Audio Inc. Its GPL-3.0 notice is retained in
+mic/driver/vendor/BlackHole-LICENSE.txt.
+
+The audio router links Opus by Xiph.Org and contributors. Its BSD license and
+patent notice are retained in mic/router/Opus-LICENSE.txt.
+
+remote-mic-app was consulted only as an implementation reference for TIS input
+source coordination and a real Fn down/up latch. No remote-mic-app code, icon
+or other proprietary asset is included.

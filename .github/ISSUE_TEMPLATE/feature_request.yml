@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a focused improvement within SiriRemote's supported scope.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What specific A2854 control or Doubao voice problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This does not require cloud transcription, arbitrary scripts, or bundled PacketLogger.
+          required: true

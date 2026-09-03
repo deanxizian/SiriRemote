@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    name: Source and metadata checks
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell scripts
+        run: |
+          find app mic dist script -type f -name '*.sh' -print0 \
+            | xargs -0 -n1 bash -n
+          bash -n dist/pkg/preinstall
+          bash -n dist/pkg/postinstall
+      - name: Validate property lists
+        run: |
+          plutil -lint app/Info.plist app/SiriRemote.entitlements
+          plutil -lint app/Resources/en.lproj/InfoPlist.strings
+          plutil -lint app/Resources/zh-Hans.lproj/InfoPlist.strings
+          plutil -lint mic/driver/Info.plist mic/driver/CaptureTest-Info.plist
+          plutil -lint mic/captured/com.deanxi.siriremote.capture.plist
+
+  core:
+    name: Core engine (SwiftPM tests)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: swift --version
+      - name: Build
+        run: swift build --package-path SiriRemoteCore
+      - name: Test
+        run: swift test --package-path SiriRemoteCore
+
+  voice-decoder:
+    name: Opus voice decoder
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Opus and run decoder self-test
+        working-directory: mic
+        run: ./build-test.sh
+
+  app:
+    name: App (compiles and links)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      # The app is compiled straight with swiftc (no Xcode project) and links the private
+      # MultitouchSupport framework, which ships with macOS — so this only proves it builds.
+      # It cannot RUN here: seizing the remote needs real hardware and Accessibility permission.
+      - name: Build app
+        working-directory: app
+        run: ./build.sh
+      - name: Verify embedded default configuration
+        working-directory: app
+        run: ./SiriRemote --verify-config

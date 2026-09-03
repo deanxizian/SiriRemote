@@ -1,0 +1,47 @@
+# Swift / compiler output
+.build/
+.swiftpm/
+*.o
+
+# App output
+app/SiriRemote
+app/SiriRemote.app/
+app/SiriRemote.icns
+app/SiriRemote.iconset/
+app/RemoteAudioState.o
+
+# Audio component output
+mic/driver/SiriRemoteAudio.driver/
+mic/driver/SiriRemoteMicCaptureTest.app/
+mic/driver/srm_capture_test
+mic/driver/srm_test_writer
+mic/driver/srm_usage_monitor
+mic/driver/srm_driver_contract_test
+mic/driver/srm_io_sim
+mic/driver/srm_notify_listener
+mic/captured/SiriRemoteCapture
+mic/router/SiriRemoteAudioRouter
+mic/router/test_parser
+mic/test_decoder
+
+# Installer/cache output
+dist/build/
+dist/out/
+dist/local/
+
+# Codex workspace metadata
+.codex/
+
+# Local hardware logs and private captures
+firmware/
+tmp/
+*.pklg
+
+# macOS / editors
+.DS_Store
+._*
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
