@@ -51,6 +51,15 @@ jobs:
         working-directory: mic
         run: ./build-test.sh
 
+  capture:
+    name: Capture service
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run policy tests and compile unsigned CI binary
+        working-directory: mic/captured
+        run: SIRIREMOTE_COMPILE_ONLY=1 ./build.sh
+
   app:
     name: App (compiles and links)
     runs-on: macos-15

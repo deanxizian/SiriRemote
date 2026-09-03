@@ -30,4 +30,15 @@ final class RemoteAggregationTests: XCTestCase {
         XCTAssertTrue(state.removeSource("a").isEmpty)
         XCTAssertEqual(state.removeSource("b"), ["siri"])
     }
+
+    func testRemovingOneInterfaceReleasesOnlyButtonsOwnedByThatInterface() {
+        var state = MultiRemoteButtonState<String, String>()
+        XCTAssertEqual(state.update(source: "buttons", button: "menu", pressed: true), .globalDown)
+        XCTAssertEqual(state.update(source: "media", button: "tv", pressed: true), .globalDown)
+
+        XCTAssertEqual(state.removeSource("buttons"), ["menu"])
+        XCTAssertFalse(state.isPressed("menu"))
+        XCTAssertTrue(state.isPressed("tv"))
+        XCTAssertEqual(state.removeSource("media"), ["tv"])
+    }
 }

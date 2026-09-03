@@ -46,6 +46,11 @@ if /usr/bin/grep -Fq 'cpu_seconds_for_pids' "$AUDIT_DIR/full/Scripts/postinstall
     echo "package still contains the blocking shell CPU sampler" >&2
     exit 1
 fi
+if /usr/bin/grep -Eq 'chown -R root:wheel "\$SUPPORT"|chmod -RN "\$SUPPORT"' \
+    "$AUDIT_DIR/full/Scripts/postinstall"; then
+    echo "postinstall must not recursively rewrite the protected PacketLogger snapshot" >&2
+    exit 1
+fi
 "$WATCHDOG" --self-test
 
 # A relocatable App can be silently installed over a same-ID development bundle outside

@@ -16,6 +16,9 @@ WATCH_WARMUP_SECONDS=3
 WATCH_SECONDS=8
 SCRIPT_DIR="$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && pwd)"
 WATCHDOG="$SCRIPT_DIR/SiriRemoteCoreAudioWatchdog"
+CAPTURE="$SUPPORT/SiriRemoteCapture"
+ROUTER="$SUPPORT/SiriRemoteAudioRouter"
+LEGAL="$SUPPORT/Legal"
 
 restart_coreaudio() {
     /usr/bin/killall coreaudiod 2>/dev/null || true
@@ -40,6 +43,30 @@ restore_previous() {
     [ ! -f "$BACKUP/had-launchdaemon" ] || /usr/bin/ditto "$BACKUP/launchdaemon" "$PLIST"
     /usr/bin/killall coreaudiod 2>/dev/null || true
     [ ! -f "$PLIST" ] || /bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
+    restored_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
+    if [ -f "$BACKUP/had-app" ] && [ "$restored_uid" -gt 0 ]; then
+        /bin/launchctl asuser "$restored_uid" /usr/bin/open -n "$APP" --args --settings \
+            >/dev/null 2>&1 || true
+    fi
+}
+
+verify_single_live_app() {
+    expected_binary="$APP/Contents/MacOS/SiriRemote"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
+             21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
+        app_pids="$(/usr/bin/pgrep -x SiriRemote 2>/dev/null || true)"
+        app_count="$(echo "$app_pids" | /usr/bin/awk 'NF { count++ } END { print count+0 }')"
+        if [ "$app_count" -eq 1 ]; then
+            app_command="$(/bin/ps -p "$app_pids" -o command= \
+                | /usr/bin/sed -e 's/^[[:space:]]*//')"
+            case "$app_command" in
+                "$expected_binary"|"$expected_binary "*) return 0 ;;
+            esac
+        fi
+        /usr/bin/perl -e 'select(undef, undef, undef, 0.25)'
+    done
+    echo "SiriRemote did not start as exactly one process from $expected_binary" >&2
+    return 1
 }
 
 trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; /bin/rm -rf "$BACKUP"; exit "$code"' \
@@ -58,9 +85,16 @@ trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; /bin/rm -rf "$BACKUP";
     false
 }
 /bin/mkdir -p "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR"
-/usr/sbin/chown -R root:wheel "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$DRIVER"
+# Do not recursively mutate SUPPORT: the Capture service may already have placed an Apple-signed,
+# root-owned PacketLogger snapshot there. PackageKit's script sandbox correctly refuses to rewrite
+# some Apple security labels. Limit ownership/ACL repair to SiriRemote's own payload paths.
+/usr/sbin/chown root:wheel "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER"
+/usr/sbin/chown -R root:wheel "$DRIVER" "$LEGAL"
+/bin/chmod -N "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER"
+/bin/chmod -RN "$DRIVER" "$LEGAL"
+/bin/chmod 755 "$SUPPORT"
 /bin/chmod 700 "$RUNTIME_DIR"
-/bin/chmod 755 "$SUPPORT/SiriRemoteCapture" "$SUPPORT/SiriRemoteAudioRouter"
+/bin/chmod 755 "$CAPTURE" "$ROUTER"
 /bin/chmod 644 "$PLIST"
 
 /usr/bin/codesign --verify --strict "$APP"
@@ -94,13 +128,13 @@ done
     echo "SiriRemote Capture service did not start" >&2
     false
 }
-/bin/rm -rf "$BACKUP"
-trap - ERR INT TERM HUP
-
 console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
 if [ "$console_uid" -gt 0 ]; then
-    /bin/launchctl asuser "$console_uid" /usr/bin/open -a "$APP" --args --settings \
-        >/dev/null 2>&1 || true
+    /bin/launchctl asuser "$console_uid" /usr/bin/open -n "$APP" --args --settings
+    verify_single_live_app
 fi
+
+/bin/rm -rf "$BACKUP"
+trap - ERR INT TERM HUP
 
 exit 0

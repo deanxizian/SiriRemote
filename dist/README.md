@@ -26,3 +26,8 @@ deletes PacketLogger, SiriRemoteForge, remote-mic-app, `MiRemoteV 2ch` or other 
 The App, Capture service, router and HAL are code-signed. The PKG itself is intentionally unsigned
 until a Developer ID Installer certificate is available, so this is a local package rather than a
 notarized public release.
+
+PacketLogger is not included in either package. At runtime the root Capture service copies the
+user-installed Apple bundle into the protected SiriRemote support directory, validates its Apple
+signature and fixed identifiers, strips inherited ACLs and executes only that root-owned snapshot.
+The uninstaller removes the snapshot with the rest of the SiriRemote support directory.

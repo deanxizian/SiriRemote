@@ -77,15 +77,15 @@ final class RemoteInputHandler {
             return
         }
 
-        let source = remoteSourceID(for: device)
-        let isNewPhysicalRemote = !deviceSources.values.contains(source)
+        // Button ownership is per HID interface, not per physical remote. A2854 mirrors some
+        // edges across interfaces; MultiRemoteButtonState collapses those edges globally while
+        // still being able to release the exact state owned by an interface that disappears.
+        let source = remoteInterfaceID(for: device)
         devices.append(device)
         deviceSources[device] = source
         acceptingInput = true
-        if isNewPhysicalRemote {
-            initialPressSuppressionDeadline[source] = DispatchTime.now().uptimeNanoseconds
-                &+ Self.initialPressSuppressionWindowNanoseconds
-        }
+        initialPressSuppressionDeadline[source] = DispatchTime.now().uptimeNanoseconds
+            &+ Self.initialPressSuppressionWindowNanoseconds
         IOHIDDeviceRegisterInputValueCallback(
             device, inputValueCallback, Unmanaged.passUnretained(self).toOpaque()
         )
@@ -103,22 +103,28 @@ final class RemoteInputHandler {
 
     func removeRemoteDevice(_ device: IOHIDDevice) {
         guard let index = devices.firstIndex(where: { $0 == device }) else { return }
-        let source = deviceSources[device] ?? remoteSourceID(for: device)
+        let source = deviceSources[device] ?? remoteInterfaceID(for: device)
         close(device)
         devices.remove(at: index)
         deviceSources[device] = nil
-
-        guard !deviceSources.values.contains(source) else {
-            rmDebug("🛰 A2854 interface removed; sibling interfaces remain")
-            return
-        }
+        acceptingInput = !devices.isEmpty
         initialPressSuppressionDeadline[source] = nil
         suppressedInitialButtons[source] = nil
         let released = buttonState.removeSource(source)
-        if released.contains("siri") { onSiriButtonEdge?(false) }
-        releaseAllInput(clearPhysicalState: false)
-        for button in released { onPhysicalButtonStateChanged?(button, false) }
-        rmDebug("🛰 last A2854 interface removed; input state released")
+        for button in released {
+            onPhysicalButtonStateChanged?(button, false)
+            if button == "siri" {
+                onSiriButtonEdge?(false)
+            } else {
+                routeFixedButton(button, pressed: false)
+            }
+        }
+        if devices.isEmpty {
+            releaseAllInput()
+            rmDebug("🛰 last A2854 interface removed; input state released")
+        } else {
+            rmDebug("🛰 A2854 interface removed; sibling interfaces remain")
+        }
     }
 
     private func close(_ device: IOHIDDevice) {
@@ -129,8 +135,20 @@ final class RemoteInputHandler {
         IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
     }
 
-    private func remoteSourceID(for device: IOHIDDevice) -> String {
-        a2854PhysicalIdentity(device)
+    private func remoteInterfaceID(for device: IOHIDDevice) -> String {
+        let service = IOHIDDeviceGetService(device)
+        var registryID: UInt64 = 0
+        if service != 0 {
+            _ = IORegistryEntryGetRegistryEntryID(service, &registryID)
+        }
+        if registryID != 0 { return "registry-entry:\(registryID)" }
+
+        // A registry entry ID is present on real IOHID devices. Keep a deterministic fallback for
+        // unusual firmware/test doubles without conflating two interfaces from one remote.
+        let usagePage = property(device, kIOHIDPrimaryUsagePageKey) ?? -1
+        let usage = property(device, kIOHIDPrimaryUsageKey) ?? -1
+        let location = property(device, kIOHIDLocationIDKey) ?? -1
+        return "\(a2854PhysicalIdentity(device))/\(usagePage):\(usage):\(location)"
     }
 
     private func property(_ device: IOHIDDevice, _ key: String) -> Int? {
@@ -157,7 +175,12 @@ final class RemoteInputHandler {
 
         if pressed, let deadline = initialPressSuppressionDeadline.removeValue(forKey: source),
            DispatchTime.now().uptimeNanoseconds <= deadline {
-            suppressedInitialButtons[source, default: []].insert(button)
+            // Suppress the matching release only when this interface created the logical down.
+            // A mirrored source-only edge may later become the last owner after another interface
+            // disappears; its release must then propagate to close the already-emitted hold.
+            if transition == .globalDown {
+                suppressedInitialButtons[source, default: []].insert(button)
+            }
             return
         }
         if !pressed, suppressedInitialButtons[source]?.remove(button) != nil {
@@ -267,11 +290,11 @@ final class RemoteInputHandler {
         releaseAllInput()
     }
 
-    private func releaseAllInput(clearPhysicalState: Bool = true) {
+    private func releaseAllInput() {
         if buttonState.heldButtons.contains("siri") { onSiriButtonEdge?(false) }
         endDeleteRepeat()
         _ = appSwitcher.end()
-        if clearPhysicalState { buttonState.removeAll() }
+        buttonState.removeAll()
         onPhysicalButtonStateReset?()
     }
 

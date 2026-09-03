@@ -65,12 +65,12 @@ final class SettingsModel: ObservableObject {
 
     func replaceConfigFromDisk(_ newConfig: Config) {
         config = newConfig
-        configLoadError = ConfigStore.lastLoadError
+        configLoadError = nil
+        configSaveError = nil
     }
 
     func reportConfigLoadError(_ error: Error) {
         configLoadError = error.localizedDescription
-        configSaveError = error.localizedDescription
     }
 
     func updateSettings(_ change: (inout Config.Settings) -> Void) {
@@ -90,6 +90,7 @@ final class SettingsModel: ObservableObject {
         guard updated != config else { return }
         do {
             try ConfigStore.save(updated)
+            ConfigStore.clearLoadError()
             config = updated
             configLoadError = nil
             configSaveError = nil
