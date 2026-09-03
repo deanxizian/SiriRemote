@@ -1,0 +1,49 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+[ "$(id -u)" -eq 0 ] || { echo "SiriRemote preinstall must run as root" >&2; exit 1; }
+
+BACKUP="/private/var/tmp/com.deanxi.siriremote.install-backup"
+APP="/Applications/SiriRemote.app"
+DRIVER="/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver"
+SUPPORT="/Library/Application Support/SiriRemote"
+PLIST="/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
+DEBUG_DOMAIN="/Library/Preferences/com.apple.MobileBluetooth.debug"
+DEBUG_PLIST="${DEBUG_DOMAIN}.plist"
+
+/usr/bin/killall SiriRemote 2>/dev/null || true
+/bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+/bin/rm -rf "$BACKUP"
+/bin/mkdir -p "$BACKUP"
+
+backup_item() {
+    source="$1"
+    name="$2"
+    if [ -e "$source" ]; then
+        /usr/bin/ditto "$source" "$BACKUP/$name"
+        /usr/bin/touch "$BACKUP/had-$name"
+    fi
+}
+
+backup_item "$APP" app
+backup_item "$DRIVER" driver
+backup_item "$SUPPORT" support
+backup_item "$PLIST" launchdaemon
+
+# Save the exact pre-SiriRemote HCITraces value once. Upgrades preserve this original snapshot.
+/bin/mkdir -p "$SUPPORT"
+if [ ! -f "$SUPPORT/preinstall-HCITraces.plist" ] \
+    && [ ! -f "$SUPPORT/preinstall-HCITraces.absent" ]; then
+    if /usr/bin/defaults read "$DEBUG_DOMAIN" HCITraces >/dev/null 2>&1; then
+        [ -f "$DEBUG_PLIST" ] || {
+            echo "HCITraces exists but $DEBUG_PLIST cannot be read" >&2
+            exit 1
+        }
+        /usr/bin/plutil -extract HCITraces xml1 \
+            -o "$SUPPORT/preinstall-HCITraces.plist" "$DEBUG_PLIST"
+    else
+        /usr/bin/touch "$SUPPORT/preinstall-HCITraces.absent"
+    fi
+fi
+
+exit 0

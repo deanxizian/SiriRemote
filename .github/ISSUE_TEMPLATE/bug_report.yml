@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a reproducible SiriRemote problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please remove personal information before attaching logs. Never upload Bluetooth captures.
+  - type: input
+    id: version
+    attributes:
+      label: SiriRemote version
+      placeholder: 0.1.0 (build number if known)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Connection or permissions
+        - Touch or circular scrolling
+        - Buttons
+        - Doubao voice input
+        - Installation or uninstall
+        - Performance
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include what you expected and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Optional logs with names, paths, dictated text, and other personal data removed.

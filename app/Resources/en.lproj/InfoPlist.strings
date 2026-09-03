@@ -1,0 +1,3 @@
+"NSBluetoothAlwaysUsageDescription" = "SiriRemote uses Bluetooth to connect to the Apple TV Siri Remote A2854.";
+"NSBluetoothPeripheralUsageDescription" = "SiriRemote uses Bluetooth to connect to the Apple TV Siri Remote A2854.";
+"NSMicrophoneUsageDescription" = "SiriRemote provides audio from the remote microphone to Siri Remote Mic.";

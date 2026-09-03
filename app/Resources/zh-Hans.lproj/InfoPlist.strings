@@ -1,0 +1,3 @@
+"NSBluetoothAlwaysUsageDescription" = "SiriRemote 需要使用蓝牙连接 Apple TV Siri Remote A2854。";
+"NSBluetoothPeripheralUsageDescription" = "SiriRemote 需要使用蓝牙连接 Apple TV Siri Remote A2854。";
+"NSMicrophoneUsageDescription" = "SiriRemote 使用遥控器麦克风向 Siri Remote Mic 提供语音。";
