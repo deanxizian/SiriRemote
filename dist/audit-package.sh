@@ -61,6 +61,8 @@ fi
     "$AUDIT_DIR/full/Scripts/postinstall"
 /usr/bin/grep -Fq 'verify_single_live_app "$console_uid"' \
     "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'Never leave a duplicate, wrong-UID or wrong-path input process alive' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
 if /usr/bin/grep -Fq '/private/var/tmp/com.deanxi.siriremote.install-backup' \
     "$AUDIT_DIR/full/Scripts/preinstall" "$AUDIT_DIR/full/Scripts/postinstall"; then
     echo "installer still uses the attacker-writable fixed rollback path" >&2

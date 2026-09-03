@@ -214,6 +214,8 @@ restore_previous() {
                 /usr/bin/open -n "$APP" --args --settings >/dev/null 2>&1 \
             || ! verify_single_live_app "$restored_uid"; then
             echo "Warning: the previous SiriRemote App was restored but could not be relaunched" >&2
+            # Never leave a duplicate, wrong-UID or wrong-path input process alive after rollback.
+            stop_siriremote_processes || true
         fi
     fi
 }
