@@ -3,7 +3,10 @@ set -Eeuo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "SiriRemote preinstall must run as root" >&2; exit 1; }
 
-BACKUP="/private/var/tmp/com.deanxi.siriremote.install-backup"
+umask 077
+
+INSTALL_STATE="/private/var/run/com.deanxi.siriremote-installer"
+BACKUP_MARKER="$INSTALL_STATE/active-backup"
 APP="/Applications/SiriRemote.app"
 DRIVER="/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver"
 SUPPORT="/Library/Application Support/SiriRemote"
@@ -11,10 +14,49 @@ PLIST="/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
 DEBUG_DOMAIN="/Library/Preferences/com.apple.MobileBluetooth.debug"
 DEBUG_PLIST="${DEBUG_DOMAIN}.plist"
 
+# PackageKit runs installers serially, so one protected rendezvous directory can hand a randomly
+# named backup from preinstall to postinstall. Never use /var/tmp here: another local user can
+# create entries there and redirect a privileged rollback before this script starts.
+[ ! -L /private/var/run ] && [ -d /private/var/run ] \
+    && [ "$(/usr/bin/stat -f %u /private/var/run)" -eq 0 ] || {
+        echo "Refusing untrusted installer-state parent" >&2
+        exit 1
+    }
+run_parent_mode="$(/usr/bin/stat -f %Lp /private/var/run)"
+run_parent_mode_value=$((8#$run_parent_mode))
+[ $((run_parent_mode_value & 0002)) -eq 0 ] || {
+    echo "Refusing world-writable installer-state parent" >&2
+    exit 1
+}
+[ ! -L "$INSTALL_STATE" ] || {
+    echo "Refusing symlinked SiriRemote installer state" >&2
+    exit 1
+}
+if [ -e "$INSTALL_STATE" ]; then
+    [ -d "$INSTALL_STATE" ] \
+        && [ "$(/usr/bin/stat -f %u "$INSTALL_STATE")" -eq 0 ] \
+        && [ "$(/usr/bin/stat -f %Lp "$INSTALL_STATE")" = 700 ] || {
+            echo "Refusing untrusted SiriRemote installer state" >&2
+            exit 1
+        }
+    /bin/rm -rf "$INSTALL_STATE"
+fi
+
+/bin/mkdir "$INSTALL_STATE"
+/usr/sbin/chown root:wheel "$INSTALL_STATE"
+/bin/chmod -N "$INSTALL_STATE"
+/bin/chmod 700 "$INSTALL_STATE"
+BACKUP="$(/usr/bin/mktemp -d "$INSTALL_STATE/backup.XXXXXX")"
+/usr/sbin/chown root:wheel "$BACKUP"
+/bin/chmod -N "$BACKUP"
+/bin/chmod 700 "$BACKUP"
+/usr/bin/printf '%s\n' "$BACKUP" > "$BACKUP_MARKER"
+/usr/sbin/chown root:wheel "$BACKUP_MARKER"
+/bin/chmod -N "$BACKUP_MARKER"
+/bin/chmod 600 "$BACKUP_MARKER"
+
 /usr/bin/killall SiriRemote 2>/dev/null || true
 /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
-/bin/rm -rf "$BACKUP"
-/bin/mkdir -p "$BACKUP"
 
 backup_item() {
     source="$1"

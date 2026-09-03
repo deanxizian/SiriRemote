@@ -61,6 +61,22 @@ fi
     "$AUDIT_DIR/full/Scripts/postinstall"
 /usr/bin/grep -Fq 'verify_single_live_app "$console_uid"' \
     "$AUDIT_DIR/full/Scripts/postinstall"
+if /usr/bin/grep -Fq '/private/var/tmp/com.deanxi.siriremote.install-backup' \
+    "$AUDIT_DIR/full/Scripts/preinstall" "$AUDIT_DIR/full/Scripts/postinstall"; then
+    echo "installer still uses the attacker-writable fixed rollback path" >&2
+    exit 1
+fi
+/usr/bin/grep -Fq 'INSTALL_STATE="/private/var/run/com.deanxi.siriremote-installer"' \
+    "$AUDIT_DIR/full/Scripts/preinstall"
+/usr/bin/grep -Fq 'mktemp -d "$INSTALL_STATE/backup.XXXXXX"' \
+    "$AUDIT_DIR/full/Scripts/preinstall"
+/usr/bin/grep -Fq 'run_parent_mode_value & 0002' \
+    "$AUDIT_DIR/full/Scripts/preinstall"
+/usr/bin/grep -Fq 'load_backup_state' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'validate_restored_components' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'verify_launchdaemon' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'refusing to activate an invalid SiriRemote rollback' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
 if /usr/bin/grep -Fq 'ps -p "$app_pids" -o command=' \
     "$AUDIT_DIR/full/Scripts/postinstall"; then
     echo "postinstall must verify the kernel process path, not mutable argv" >&2

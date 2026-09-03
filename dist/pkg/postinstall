@@ -3,7 +3,11 @@ set -Eeuo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "SiriRemote postinstall must run as root" >&2; exit 1; }
 
-BACKUP="/private/var/tmp/com.deanxi.siriremote.install-backup"
+umask 077
+
+INSTALL_STATE="/private/var/run/com.deanxi.siriremote-installer"
+BACKUP_MARKER="$INSTALL_STATE/active-backup"
+BACKUP=""
 APP="/Applications/SiriRemote.app"
 DRIVER="/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver"
 SUPPORT="/Library/Application Support/SiriRemote"
@@ -22,6 +26,44 @@ ROUTER="$SUPPORT/SiriRemoteAudioRouter"
 LEGAL="$SUPPORT/Legal"
 EXPECTED_TEAM="96M7FW2XLU"
 EXPECTED_AUTHORITY="Developer ID Application: ZIAN XI (96M7FW2XLU)"
+
+load_backup_state() {
+    [ ! -L "$INSTALL_STATE" ] && [ -d "$INSTALL_STATE" ] \
+        && [ "$(/usr/bin/stat -f %u "$INSTALL_STATE")" -eq 0 ] \
+        && [ "$(/usr/bin/stat -f %Lp "$INSTALL_STATE")" = 700 ] || {
+            echo "SiriRemote installer state is missing or untrusted" >&2
+            return 1
+        }
+    [ ! -L "$BACKUP_MARKER" ] && [ -f "$BACKUP_MARKER" ] \
+        && [ "$(/usr/bin/stat -f %u "$BACKUP_MARKER")" -eq 0 ] \
+        && [ "$(/usr/bin/stat -f %Lp "$BACKUP_MARKER")" = 600 ] \
+        && [ "$(/usr/bin/awk 'END { print NR }' "$BACKUP_MARKER")" -eq 1 ] || {
+            echo "SiriRemote backup marker is missing or untrusted" >&2
+            return 1
+        }
+
+    candidate="$(/bin/cat "$BACKUP_MARKER")"
+    /usr/bin/printf '%s\n' "$candidate" \
+        | /usr/bin/grep -Eq '^/private/var/run/com[.]deanxi[.]siriremote-installer/backup[.][A-Za-z0-9]{6,}$' || {
+            echo "SiriRemote backup marker contains an invalid path" >&2
+            return 1
+        }
+    [ ! -L "$candidate" ] && [ -d "$candidate" ] \
+        && [ "$(/usr/bin/stat -f %u "$candidate")" -eq 0 ] \
+        && [ "$(/usr/bin/stat -f %Lp "$candidate")" = 700 ] || {
+            echo "SiriRemote rollback backup is missing or untrusted" >&2
+            return 1
+        }
+    BACKUP="$candidate"
+}
+
+cleanup_install_state() {
+    # INSTALL_STATE has already been proven to be a root-owned, non-symlinked 0700 directory.
+    if ! /bin/rm -rf "$INSTALL_STATE"; then
+        echo "Warning: could not remove protected SiriRemote installer state" >&2
+    fi
+    return 0
+}
 
 restart_coreaudio() {
     /usr/bin/killall coreaudiod 2>/dev/null || true
@@ -62,6 +104,51 @@ verify_expected_signature() {
     return 0
 }
 
+verify_secure_root_item() {
+    target="$1"
+    kind="$2"
+    [ ! -L "$target" ] || return 1
+    case "$kind" in
+        directory) [ -d "$target" ] || return 1 ;;
+        file) [ -f "$target" ] || return 1 ;;
+        *) return 1 ;;
+    esac
+    [ "$(/usr/bin/stat -f %u "$target")" -eq 0 ] || return 1
+    mode="$(/usr/bin/stat -f %Lp "$target")"
+    mode_value=$((8#$mode))
+    [ $((mode_value & 0022)) -eq 0 ]
+}
+
+verify_launchdaemon() {
+    verify_secure_root_item "$PLIST" file || return 1
+    /usr/bin/plutil -lint "$PLIST" >/dev/null || return 1
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$PLIST" 2>/dev/null)" \
+        = com.deanxi.siriremote.capture ] || return 1
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST" 2>/dev/null)" \
+        = "$CAPTURE" ] || return 1
+}
+
+validate_restored_components() {
+    if [ -f "$BACKUP/had-app" ]; then
+        verify_secure_root_item "$APP" directory \
+            && verify_expected_signature "$APP" com.deanxi.siriremote || return 1
+    fi
+    if [ -f "$BACKUP/had-driver" ]; then
+        verify_secure_root_item "$DRIVER" directory \
+            && verify_expected_signature "$DRIVER" com.deanxi.siriremote.audio.driver || return 1
+    fi
+    if [ -f "$BACKUP/had-support" ]; then
+        verify_secure_root_item "$SUPPORT" directory \
+            && verify_secure_root_item "$CAPTURE" file \
+            && verify_secure_root_item "$ROUTER" file \
+            && verify_expected_signature "$CAPTURE" SiriRemoteCapture \
+            && verify_expected_signature "$ROUTER" SiriRemoteAudioRouter || return 1
+    fi
+    if [ -f "$BACKUP/had-launchdaemon" ]; then
+        [ -f "$BACKUP/had-support" ] && verify_launchdaemon || return 1
+    fi
+}
+
 restore_previous() {
     set +e
     # A failed live-process check can mean a duplicate or wrong-path process survived. Stop every
@@ -77,13 +164,33 @@ restore_previous() {
     [ ! -f "$BACKUP/had-driver" ] || /usr/bin/ditto "$BACKUP/driver" "$DRIVER"
     [ ! -f "$BACKUP/had-support" ] || /usr/bin/ditto "$BACKUP/support" "$SUPPORT"
     [ ! -f "$BACKUP/had-launchdaemon" ] || /usr/bin/ditto "$BACKUP/launchdaemon" "$PLIST"
-    /usr/bin/killall coreaudiod 2>/dev/null || true
-    [ ! -f "$PLIST" ] || /bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
+
+    # The backup lives below a non-traversable root directory. Immediately remove inherited ACLs
+    # from the restored system paths, then validate identity before activating any component.
+    [ ! -f "$BACKUP/had-app" ] || /bin/chmod -RN "$APP" 2>/dev/null || true
+    [ ! -f "$BACKUP/had-driver" ] || /bin/chmod -RN "$DRIVER" 2>/dev/null || true
+    if [ -f "$BACKUP/had-support" ]; then
+        /bin/chmod -N "$SUPPORT" "$CAPTURE" "$ROUTER" 2>/dev/null || true
+    fi
+    [ ! -f "$BACKUP/had-launchdaemon" ] || /bin/chmod -N "$PLIST" 2>/dev/null || true
+
+    # A rollback is executable input to root services. Validate every restored component before
+    # asking launchd, coreaudiod or the console user to load any of it.
+    restored_components_valid=1
+    if ! validate_restored_components; then
+        restored_components_valid=0
+        echo "Warning: refusing to activate an invalid SiriRemote rollback" >&2
+        /bin/rm -rf "$APP" "$DRIVER" "$SUPPORT"
+        /bin/rm -f "$PLIST"
+    fi
+    restart_coreaudio || true
+    if [ "$restored_components_valid" -eq 1 ] && [ -f "$BACKUP/had-launchdaemon" ]; then
+        /bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
+    fi
     restored_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
-    if [ -f "$BACKUP/had-app" ] && [ "$restored_uid" -gt 0 ]; then
-        if ! verify_expected_signature "$APP" com.deanxi.siriremote; then
-            echo "Warning: the previous SiriRemote App was restored but has an invalid identity" >&2
-        elif ! verify_expected_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier; then
+    if [ "$restored_components_valid" -eq 1 ] \
+        && [ -f "$BACKUP/had-app" ] && [ "$restored_uid" -gt 0 ]; then
+        if ! verify_expected_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier; then
             echo "Warning: the process verifier has an invalid identity" >&2
         elif ! /bin/launchctl asuser "$restored_uid" \
                 /usr/bin/open -n "$APP" --args --settings >/dev/null 2>&1 \
@@ -110,7 +217,9 @@ verify_single_live_app() {
     return 1
 }
 
-trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; /bin/rm -rf "$BACKUP"; exit "$code"' \
+load_backup_state
+
+trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; cleanup_install_state; exit "$code"' \
     ERR INT TERM HUP
 
 [ -d "$APP" ] || {
@@ -184,7 +293,7 @@ stop_siriremote_processes
 /bin/launchctl asuser "$console_uid" /usr/bin/open -n "$APP" --args --settings
 verify_single_live_app "$console_uid"
 
-/bin/rm -rf "$BACKUP"
 trap - ERR INT TERM HUP
+cleanup_install_state
 
 exit 0

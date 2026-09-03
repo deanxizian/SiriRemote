@@ -34,6 +34,13 @@ jobs:
           xcrun clang -O2 -Wall -Wextra -Werror \
             -mmacosx-version-min=13.0 dist/process_verifier.c \
             -o "$RUNNER_TEMP/SiriRemoteProcessVerifier"
+      - name: Validate privileged rollback policy
+        run: |
+          ! grep -F '/private/var/tmp/com.deanxi.siriremote.install-backup' \
+            dist/pkg/preinstall dist/pkg/postinstall
+          grep -F 'mktemp -d "$INSTALL_STATE/backup.XXXXXX"' dist/pkg/preinstall
+          grep -F 'load_backup_state' dist/pkg/postinstall
+          grep -F 'validate_restored_components' dist/pkg/postinstall
 
   core:
     name: Core engine (SwiftPM tests)

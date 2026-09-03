@@ -11,6 +11,7 @@ STAGE_APP="$STAGE_DIR/SiriRemote.app"
 LIVE_APP="/Applications/SiriRemote.app"
 LIVE_BINARY="$LIVE_APP/Contents/MacOS/SiriRemote"
 LIVE_INFO="$LIVE_APP/Contents/Info.plist"
+PROCESS_VERIFIER=""
 
 case "$MODE" in
     run|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify) ;;
@@ -45,14 +46,10 @@ verify_single_live_process() {
     for _ in 1 2 3 4 5 6 7 8 9 10; do
         pids="$(/usr/bin/pgrep -x "$APP_NAME" 2>/dev/null || true)"
         count="$(echo "$pids" | /usr/bin/awk 'NF { count++ } END { print count+0 }')"
-        if [ "$count" -eq 1 ]; then
-            command="$(/bin/ps -p "$pids" -o command= | /usr/bin/sed -e 's/^[[:space:]]*//')"
-            case "$command" in
-                "$LIVE_BINARY"|"$LIVE_BINARY "*)
-                    echo "✓ one live SiriRemote process: $LIVE_BINARY"
-                    return 0
-                    ;;
-            esac
+        if [ "$count" -eq 1 ] \
+            && "$PROCESS_VERIFIER" "$pids" "$(/usr/bin/id -u)" "$LIVE_BINARY"; then
+            echo "✓ one live SiriRemote process: $LIVE_BINARY"
+            return 0
         fi
         /usr/bin/perl -e 'select(undef, undef, undef, 0.25)'
     done
@@ -105,12 +102,22 @@ verify_local_bundle "$STAGE_APP"
 # The old process remains alive unless and until installation succeeds.
 INSTALL_WORK="$(/usr/bin/mktemp -d /private/tmp/siriremote-install.XXXXXX)"
 INSTALL_PKG="$INSTALL_WORK/SiriRemote.pkg"
+PROCESS_VERIFIER="$INSTALL_WORK/SiriRemoteProcessVerifier"
 
 cleanup_install_work() {
-    /bin/rm -f "$INSTALL_PKG" >/dev/null 2>&1 || true
+    /bin/rm -f "$INSTALL_PKG" "$PROCESS_VERIFIER" >/dev/null 2>&1 || true
     /bin/rmdir "$INSTALL_WORK" >/dev/null 2>&1 || true
 }
 trap cleanup_install_work EXIT INT TERM HUP
+
+xcrun clang -O2 -Wall -Wextra -Werror -mmacosx-version-min=13.0 \
+    "$ROOT_DIR/dist/process_verifier.c" -o "$PROCESS_VERIFIER"
+/usr/bin/codesign --force --options runtime --timestamp=none \
+    --sign "$STABLE_SIGN_IDENTITY" "$PROCESS_VERIFIER"
+/usr/bin/codesign --verify --strict "$PROCESS_VERIFIER"
+verifier_info="$(signature_info "$PROCESS_VERIFIER")"
+echo "$verifier_info" | /usr/bin/grep -Fq 'Identifier=SiriRemoteProcessVerifier'
+echo "$verifier_info" | /usr/bin/grep -Fq "Authority=$STABLE_SIGN_IDENTITY"
 
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
     "$STAGE_APP/Contents/Info.plist")"

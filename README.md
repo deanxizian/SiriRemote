@@ -269,7 +269,7 @@ SHA256SUMS.txt
 2. 使用稳定身份 `Developer ID Application: ZIAN XI (96M7FW2XLU)` 签名。
 3. 拒绝 ad-hoc 签名或签名校验失败的 bundle。
 4. 通过 Installer 替换 `/Applications/SiriRemote.app`。
-5. 启动并确认系统中只有一个来自该路径的 SiriRemote UI 进程。
+5. 通过内核报告的进程路径和 UID，确认系统中只有一个来自该路径的 SiriRemote UI 进程。
 
 实时测试只使用 `/Applications/SiriRemote.app`，不要直接运行 `app/SiriRemote.app` 或其他
 项目内 bundle，以免 TCC 权限、进程状态和实际测试版本不一致。

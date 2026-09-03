@@ -37,3 +37,8 @@ The uninstaller removes the snapshot with the rest of the SiriRemote support dir
 After installation or rollback, the package uses a signed native verifier to confirm that exactly
 one UI process is running with the console user's UID and the kernel-reported executable path
 `/Applications/SiriRemote.app/Contents/MacOS/SiriRemote`.
+
+Upgrade rollback data is stored in a random, root-owned `0700` directory below
+`/private/var/run/com.deanxi.siriremote-installer/`. Before a rollback is activated, the installer
+revalidates the App, HAL, Capture service and router signatures, checks the LaunchDaemon's fixed
+label and executable path, and rejects writable or symlinked privileged components.
