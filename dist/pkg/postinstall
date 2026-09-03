@@ -19,6 +19,8 @@ WATCHDOG="$SCRIPT_DIR/SiriRemoteCoreAudioWatchdog"
 CAPTURE="$SUPPORT/SiriRemoteCapture"
 ROUTER="$SUPPORT/SiriRemoteAudioRouter"
 LEGAL="$SUPPORT/Legal"
+EXPECTED_TEAM="96M7FW2XLU"
+EXPECTED_AUTHORITY="Developer ID Application: ZIAN XI (96M7FW2XLU)"
 
 restart_coreaudio() {
     /usr/bin/killall coreaudiod 2>/dev/null || true
@@ -44,6 +46,21 @@ stop_siriremote_processes() {
     return 1
 }
 
+verify_expected_signature() {
+    target="$1"
+    identifier="$2"
+    /usr/bin/codesign --verify --strict "$target" || return 1
+    details="$(/usr/bin/codesign -d --verbose=4 "$target" 2>&1)" || return 1
+    echo "$details" | /usr/bin/grep -Fq "Identifier=$identifier" || return 1
+    echo "$details" | /usr/bin/grep -Fq "TeamIdentifier=$EXPECTED_TEAM" || return 1
+    echo "$details" | /usr/bin/grep -Fq "Authority=$EXPECTED_AUTHORITY" || return 1
+    if echo "$details" | /usr/bin/grep -Eq 'Signature=adhoc|flags=.*adhoc'; then
+        echo "Refusing ad-hoc-signed component: $target" >&2
+        return 1
+    fi
+    return 0
+}
+
 restore_previous() {
     set +e
     # A failed live-process check can mean a duplicate or wrong-path process survived. Stop every
@@ -63,7 +80,9 @@ restore_previous() {
     [ ! -f "$PLIST" ] || /bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
     restored_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
     if [ -f "$BACKUP/had-app" ] && [ "$restored_uid" -gt 0 ]; then
-        if ! /bin/launchctl asuser "$restored_uid" \
+        if ! verify_expected_signature "$APP" com.deanxi.siriremote; then
+            echo "Warning: the previous SiriRemote App was restored but has an invalid identity" >&2
+        elif ! /bin/launchctl asuser "$restored_uid" \
                 /usr/bin/open -n "$APP" --args --settings >/dev/null 2>&1 \
             || ! verify_single_live_app; then
             echo "Warning: the previous SiriRemote App was restored but could not be relaunched" >&2
@@ -123,10 +142,11 @@ console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
 /bin/chmod 755 "$CAPTURE" "$ROUTER"
 /bin/chmod 644 "$PLIST"
 
-/usr/bin/codesign --verify --strict "$APP"
-/usr/bin/codesign --verify --strict "$DRIVER"
-/usr/bin/codesign --verify --strict "$SUPPORT/SiriRemoteCapture"
-/usr/bin/codesign --verify --strict "$SUPPORT/SiriRemoteAudioRouter"
+verify_expected_signature "$APP" com.deanxi.siriremote
+verify_expected_signature "$DRIVER" com.deanxi.siriremote.audio.driver
+verify_expected_signature "$CAPTURE" SiriRemoteCapture
+verify_expected_signature "$ROUTER" SiriRemoteAudioRouter
+verify_expected_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog
 
 restart_coreaudio
 /usr/bin/perl -e 'select(undef, undef, undef, 2)'

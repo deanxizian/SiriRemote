@@ -53,6 +53,10 @@ if /usr/bin/grep -Eq 'chown -R root:wheel "\$SUPPORT"|chmod -RN "\$SUPPORT"' \
 fi
 /usr/bin/grep -Fq 'stop_siriremote_processes' "$AUDIT_DIR/full/Scripts/postinstall"
 /usr/bin/grep -Fq 'requires a logged-in console user' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'verify_expected_signature "$APP" com.deanxi.siriremote' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'Developer ID Application: ZIAN XI (96M7FW2XLU)' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
 "$WATCHDOG" --self-test
 
 # A relocatable App can be silently installed over a same-ID development bundle outside
