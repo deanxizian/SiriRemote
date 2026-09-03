@@ -75,6 +75,10 @@ fi
 /usr/bin/grep -Fq 'load_backup_state' "$AUDIT_DIR/full/Scripts/postinstall"
 /usr/bin/grep -Fq 'validate_restored_components' "$AUDIT_DIR/full/Scripts/postinstall"
 /usr/bin/grep -Fq 'verify_launchdaemon' "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'plutil -extract ProgramArguments raw' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
+/usr/bin/grep -Fq 'EnvironmentVariables UserName GroupName' \
+    "$AUDIT_DIR/full/Scripts/postinstall"
 /usr/bin/grep -Fq 'refusing to activate an invalid SiriRemote rollback' \
     "$AUDIT_DIR/full/Scripts/postinstall"
 if /usr/bin/grep -Fq 'ps -p "$app_pids" -o command=' \

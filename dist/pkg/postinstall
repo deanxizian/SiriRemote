@@ -126,6 +126,24 @@ verify_launchdaemon() {
         = com.deanxi.siriremote.capture ] || return 1
     [ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST" 2>/dev/null)" \
         = "$CAPTURE" ] || return 1
+    [ "$(/usr/bin/plutil -extract ProgramArguments raw -o - "$PLIST" 2>/dev/null)" = 1 ] \
+        || return 1
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$PLIST" 2>/dev/null)" = true ] \
+        || return 1
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$PLIST" 2>/dev/null)" = true ] \
+        || return 1
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :ProcessType' "$PLIST" 2>/dev/null)" = Adaptive ] \
+        || return 1
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :StandardOutPath' "$PLIST" 2>/dev/null)" \
+        = "$LOG_DIR/capture.log" ] || return 1
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :StandardErrorPath' "$PLIST" 2>/dev/null)" \
+        = "$LOG_DIR/capture.log" ] || return 1
+    for forbidden_key in Program EnvironmentVariables UserName GroupName RootDirectory \
+        WorkingDirectory BundleProgram Disabled; do
+        if /usr/libexec/PlistBuddy -c "Print :$forbidden_key" "$PLIST" >/dev/null 2>&1; then
+            return 1
+        fi
+    done
 }
 
 validate_restored_components() {
@@ -247,9 +265,9 @@ console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
 # Do not recursively mutate SUPPORT: the Capture service may already have placed an Apple-signed,
 # root-owned PacketLogger snapshot there. PackageKit's script sandbox correctly refuses to rewrite
 # some Apple security labels. Limit ownership/ACL repair to SiriRemote's own payload paths.
-/usr/sbin/chown root:wheel "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER"
+/usr/sbin/chown root:wheel "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER" "$PLIST"
 /usr/sbin/chown -R root:wheel "$DRIVER" "$LEGAL"
-/bin/chmod -N "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER"
+/bin/chmod -N "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER" "$PLIST"
 /bin/chmod -RN "$DRIVER" "$LEGAL"
 /bin/chmod 755 "$SUPPORT"
 /bin/chmod 700 "$RUNTIME_DIR"
