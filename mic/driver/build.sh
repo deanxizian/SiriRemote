@@ -68,11 +68,21 @@ clang -O2 -Wall -Wextra -Werror -isysroot "$SDK" srm_io_sim.c \
 # The product's system components share one Developer ID identity and opt into the hardened
 # runtime. Fail closed: silently switching identity would make upgrades and trust diagnostics
 # nondeterministic.
+CODE_SIGN_TIMESTAMP="${SIRIREMOTE_CODESIGN_TIMESTAMP:-none}"
+case "$CODE_SIGN_TIMESTAMP" in
+    none) CODE_SIGN_TIMESTAMP_ARGS=(--timestamp=none) ;;
+    secure) CODE_SIGN_TIMESTAMP_ARGS=(--timestamp) ;;
+    *)
+        echo "SIRIREMOTE_CODESIGN_TIMESTAMP must be 'none' or 'secure'" >&2
+        exit 2
+        ;;
+esac
 security find-identity -v -p codesigning | grep -Fq "\"$DRIVER_SIGN_IDENTITY\"" || {
     echo "required signing identity is unavailable: $DRIVER_SIGN_IDENTITY" >&2
     exit 1
 }
-codesign --force --options runtime --timestamp=none --sign "$DRIVER_SIGN_IDENTITY" "$DRIVER"
+codesign --force --options runtime "${CODE_SIGN_TIMESTAMP_ARGS[@]}" \
+    --sign "$DRIVER_SIGN_IDENTITY" "$DRIVER"
 if [ -n "$CAPTURE_SIGN_IDENTITY" ] && security find-identity -v -p codesigning | grep -Fq "\"$CAPTURE_SIGN_IDENTITY\""; then
     codesign --force --sign "$CAPTURE_SIGN_IDENTITY" "$CAPTURE_APP"
     echo "✓ capture test signed with stable development identity"

@@ -2,25 +2,20 @@
 
 [![CI](https://github.com/deanxizian/SiriRemote/actions/workflows/ci.yml/badge.svg)](https://github.com/deanxizian/SiriRemote/actions/workflows/ci.yml)
 
-SiriRemote 是一款面向 **Apple TV Siri Remote 第三代（A2854）** 的 macOS 菜单栏应用。
-它把遥控器变成 Mac 的触控与按键控制器，并将遥控器实体麦克风接入豆包输入法。
-
-项目以精简和稳定为目标：按键采用固定布局，不包含云端转写、API Key、按键映射、
-Layer、App Wheel、Shell 或 AppleScript 等扩展功能。
+SiriRemote 是一款面向 **Apple TV Siri Remote 第三代（A2854）** 的 macOS 菜单栏应用，
+提供 Mac 触控、固定按键控制，以及遥控器实体麦克风到豆包输入法的语音输入。
 
 这是非官方社区项目，与 Apple 或字节跳动无隶属关系。触控和遥控器语音依赖未公开的
 macOS/蓝牙接口，升级系统前请保留可用安装包和卸载包。
 
 ## 功能概览
 
-- 触摸板移动指针、轻触左键、双指手势和多显示器边缘处理。
-- 外圈圆周滚动，可与触摸板分别开启或关闭。
+- 触摸板指针、轻触左键、双指手势和独立开关的外圈圆周滚动。
 - 固定的方向键、媒体键、锁屏、连续删除和 App 切换操作。
 - Siri 键支持短按 Return 和按住说话两种手势。
 - A2854 实体麦克风通过 `Siri Remote Mic` 输入豆包语音。
-- 自动发现同一遥控器公开的多个 HID Interface，并在断连、睡眠、权限撤销或退出时
-  释放鼠标键、Command、Fn 和所有延迟动作。
-- 原生菜单栏运行；关闭主窗口后隐藏 Dock 图标，应用继续在后台工作。
+- 断连、睡眠、权限撤销或退出时自动释放鼠标键、Command、Fn 和延迟动作。
+- 关闭主窗口后隐藏 Dock 图标，仅在菜单栏后台运行。
 
 SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管一只 A2854；
 检测到第二只遥控器时会提示并忽略其输入。
@@ -43,28 +38,43 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 
 ### 1. 配对遥控器
 
-先在“系统设置 → 蓝牙”中配对 A2854，并确认它处于已连接状态。
+1. 给遥控器充电，打开“系统设置 → 蓝牙”并记住当前附近设备。
+2. 将遥控器靠近 Mac，同时按住 **返回键（`<`）+ 音量加键**约 5 秒，使它进入配对状态。
+3. 连接刚出现的设备。它常显示为序列号或不明显的名称，**不一定叫 `Siri Remote`**。
+4. SiriRemote 显示“已连接”即已通过 Apple VID `0x004C`、PID `0x0315` 验证。
+
+若没有新设备，按住 **TV/控制中心键 + 音量减键**约 5 秒重启遥控器，等待 5–10 秒后重试；
+同时避免附近 Apple TV 抢先连接。组合键参见
+[Apple 官方说明](https://support.apple.com/102569)。
 
 ### 2. 安装 PacketLogger
 
 从 Apple Developer 下载
 [Additional Tools for Xcode](https://developer.apple.com/download/all/?q=Additional+Tools+for+Xcode)，
-将其中的 `PacketLogger.app` 放到 `/Applications`：
-
-```text
-/Applications/PacketLogger.app
-```
-
-PacketLogger 是 Apple 工具，不随 SiriRemote 安装包分发。普通触控和按键不依赖它，
-只有遥控器语音需要它。
+将 `PacketLogger.app` 放到 `/Applications`。它不随 SiriRemote 分发，且只有遥控器语音需要。
 
 ### 3. 安装 SiriRemote
 
-双击本地构建产物：
+从项目的 [GitHub Releases](https://github.com/deanxizian/SiriRemote/releases) 下载同一版本的
+三个文件：
 
 ```text
-dist/out/SiriRemote-Full-Setup.pkg
+SiriRemote-0.1.0-Full-Setup.pkg
+SiriRemote-0.1.0-Complete-Uninstall.pkg
+SiriRemote-0.1.0-SHA256SUMS.txt
 ```
+
+先在下载目录核对校验和：
+
+```sh
+shasum -a 256 -c SiriRemote-0.1.0-SHA256SUMS.txt
+```
+
+两个 PKG 均显示 `OK` 后再安装 Full Setup。PKG 使用
+`Developer ID Installer: ZIAN XI (96M7FW2XLU)` 签名；包内 App、Capture 服务、音频路由器
+和 HAL 驱动使用同一团队的 `Developer ID Application` 身份签名。当前发行包尚未完成 Apple
+公证；若 macOS 阻止打开，请在尝试打开后进入“系统设置 → 隐私与安全”，在“安全性”中
+选择“仍要打开”并完成管理员验证。不要关闭 Gatekeeper，也不要清除文件隔离属性。
 
 安装包会安装以下本项目组件：
 
@@ -75,14 +85,12 @@ dist/out/SiriRemote-Full-Setup.pkg
 /Library/LaunchDaemons/com.deanxi.siriremote.capture.plist
 ```
 
-每次启动 SiriRemote 都会打开主窗口。关闭窗口后应用仍在菜单栏运行；点击菜单中的
-“打开 SiriRemote”可重新打开窗口，使用 Command-Q 或菜单中的“退出 SiriRemote”才会结束应用。
+关闭主窗口后应用仍在菜单栏运行；从菜单栏重新打开，或用 Command-Q 完全退出。
 
 ### 4. 授予辅助功能权限
 
-进入 SiriRemote 的“权限”页，点击未授权的“辅助功能”状态行，然后在系统设置中打开权限。
-权限开启后应用会自动恢复输入链路；如果 macOS 保留了旧的 HID 授权状态，SiriRemote 会安全
-释放全部输入并自动重启一次，不需要手工退出重开。
+在 SiriRemote 的“权限”页点击未授权的“辅助功能”状态行并完成授权。应用会自动恢复输入；
+若 macOS 仍保留旧 HID 授权状态，应用会安全释放输入并自动重启一次。
 
 ### 5. 配置豆包输入法
 
@@ -119,8 +127,8 @@ SiriRemote 不会修改 macOS 默认输入设备。开始语音时，如果当�
 | 短按后松开 | 立即发送 Return |
 | 按住至少 200 ms | 开始按住说话；松开后结束录音 |
 
-第一次按下时会预热采集链路，但只有同一次物理按压达到 200 ms 后才会真正发送 Fn down。
-短按不会打开豆包语音。采集或音频在 1.5 秒内未准备好时，会安全中止并释放 Fn。
+按下时会预热采集；达到 200 ms 才发送 Fn down，短按不会打开语音。1.5 秒内未准备好时
+会安全中止并释放 Fn。
 
 ## 设置窗口
 
@@ -131,8 +139,7 @@ SiriRemote 不会修改 macOS 默认输入设备。开始语音时，如果当�
 - **语音**：显示 A2854、Apple PacketLogger 和豆包输入法状态；仅在异常时提供对应跳转。
 - **权限**：显示辅助功能授权状态、设置开机自启动，并在权限缺失时打开正确的系统设置页面。
 
-触摸板关闭后，指针、轻触、拖动和双指手势全部停止；外圈滚轮仍由自己的开关独立控制。
-关闭触摸、遥控器断连、Mac 睡眠或应用退出时，未完成的鼠标操作会立即清理。
+触摸关闭后，指针、轻触、拖动和双指手势停止，外圈滚轮仍由独立开关控制。
 
 ## 语音链路
 
@@ -148,13 +155,11 @@ A2854 实体麦克风
 → 豆包输入法
 ```
 
-PacketLogger 本身不负责“解密”语音。它只记录蓝牙控制器看到的 HCI 数据；SiriRemote 的
-解析器从捕获文件中重组 ACL/L2CAP/ATT Notification，识别当前语音通道和帧序列，校验
-Opus TOC 后解码成 PCM。虚拟麦克风再把单声道数据复制为左右双声道，提供给豆包输入法。
+PacketLogger 只记录蓝牙 HCI 数据；SiriRemote 重组 ACL/L2CAP/ATT Notification、校验并
+解码 Opus，再将单声道 PCM 复制为双声道交给虚拟麦克风。
 
-豆包语音启动前，应用会选择已经启用的豆包输入法，并通过 CGEvent 发送真实配对的
-Fn down/up。Siri 键松开后仍接收约 80 ms 的迟到帧，并最多等待 750 ms 让虚拟麦克风读完
-已经写入的数据，减少首字和尾音被截断的情况。
+应用切换到已启用的豆包输入法后发送配对的 Fn down/up；松开 Siri 键后继续接收约 80 ms
+迟到帧，并最多等待 750 ms 排空音频。
 
 ### 后台组件
 
@@ -177,10 +182,8 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 - 断连、睡眠、PacketLogger 或路由器异常、权限丢失和应用退出都会使当前语音 generation
   失效，并关闭采集 demand。
 - Capture 服务只执行固定的 SiriRemote 工作流，不接受调用方提供任意命令、UID 或路径。
-- Capture 服务不会以 root 直接执行用户可写的 `/Applications/PacketLogger.app`。它只在本机
-  创建 root 拥有的工作副本，移除来源 ACL，并在每次启动采集前验证 Apple 签名、
-  Bundle ID、文件所有权和写权限；Apple 更新原版后会按 App 与命令行组件的签名身份自动
-  刷新工作副本，验证失败时拒绝启动语音采集。
+- Capture 服务不以 root 直接运行 `/Applications/PacketLogger.app`；它使用 root 所有的工作
+  副本，并在采集前验证 Apple 签名、Bundle ID、文件所有权和写权限。
 - 语音采集的临时文件位于 `/private/var/run/com.deanxi.siriremote/`，会在会话结束后清理。
 
 ## 常见问题
@@ -192,8 +195,7 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 
 ### 已连接，但触控或按键没有反应
 
-检查辅助功能权限。若刚刚重新授权，等待 SiriRemote 自动恢复或自动重启一次。不要同时运行
-多个 SiriRemote 副本，也不要从项目目录直接启动另一个 App bundle。
+检查辅助功能权限并等待自动恢复；不要同时运行多个 SiriRemote 副本。
 
 ### 按 Siri 键没有出现豆包语音界面
 
@@ -206,9 +208,8 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 
 ### 豆包界面出现，但没有波形或无法识别
 
-在豆包输入法中确认麦克风为 **Siri Remote Mic**，再查看语音页中的 A2854、PacketLogger
-和豆包输入法状态。`Siri Remote Mic` 无生产者时会正确输出静音，因此“设备可见”并不等于
-遥控器音频已经到达。
+在豆包输入法中确认麦克风为 **Siri Remote Mic**，再检查语音页状态。设备可见不代表遥控器
+音频已到达，因为虚拟麦克风在无生产者时会输出静音。
 
 ### 查看诊断日志
 
@@ -230,7 +231,7 @@ pgrep -fl 'SiriRemote|packetlogger|SiriRemoteAudioRouter|SiriRemoteCapture'
 双击：
 
 ```text
-dist/out/SiriRemote-Complete-Uninstall.pkg
+dist/out/SiriRemote-0.1.0-Complete-Uninstall.pkg
 ```
 
 卸载包会删除 SiriRemote App、HAL 驱动、Capture 服务、LaunchDaemon、当前控制台用户的
@@ -252,9 +253,9 @@ dist/build-release.sh 0.1.0
 内容审计。输出位于 `dist/out/`：
 
 ```text
-SiriRemote-Full-Setup.pkg
-SiriRemote-Complete-Uninstall.pkg
-SHA256SUMS.txt
+SiriRemote-0.1.0-Full-Setup.pkg
+SiriRemote-0.1.0-Complete-Uninstall.pkg
+SiriRemote-0.1.0-SHA256SUMS.txt
 ```
 
 ### 本机开发验证
@@ -263,13 +264,8 @@ SHA256SUMS.txt
 ./script/build_and_run.sh --verify
 ```
 
-这个入口会：
-
-1. 运行 SwiftPM 测试并构建 App。
-2. 使用稳定身份 `Developer ID Application: ZIAN XI (96M7FW2XLU)` 签名。
-3. 拒绝 ad-hoc 签名或签名校验失败的 bundle。
-4. 通过 Installer 替换 `/Applications/SiriRemote.app`。
-5. 通过内核报告的进程路径和 UID，确认系统中只有一个来自该路径的 SiriRemote UI 进程。
+该入口会测试、构建并使用稳定 Developer ID 签名，通过 Installer 更新
+`/Applications/SiriRemote.app`，拒绝 ad-hoc 或无效签名，并确认只运行这一份 UI 进程。
 
 实时测试只使用 `/Applications/SiriRemote.app`，不要直接运行 `app/SiriRemote.app` 或其他
 项目内 bundle，以免 TCC 权限、进程状态和实际测试版本不一致。
@@ -282,7 +278,8 @@ SHA256SUMS.txt
 
 App 使用 Developer ID Application 证书签名，但为兼容私有 `MultitouchSupport.framework`
 不启用 Hardened Runtime；Capture 服务、音频路由器和 HAL 驱动启用 Hardened Runtime。
-当前 PKG 没有 Developer ID Installer 签名，因此属于本机安装包，不承诺公证或公开分发。
+两个 PKG 使用 Developer ID Installer 证书和可信时间戳签名；在实际完成 Apple 公证与装订
+前，文档和 Release 不会将它们标记为已公证。
 
 ## 仓库结构
 
@@ -323,8 +320,6 @@ commit `781a738ef3402c3c5eea5e2faa4ae53c9e4ffbc5`。
 - [BlackHole](https://github.com/ExistentialAudio/BlackHole)：CoreAudio HAL 技术基线。
 - [Opus](https://opus-codec.org/)：遥控器语音帧解码。
 
-逐文件来源和改动见 [`SOURCE_PROVENANCE.md`](SOURCE_PROVENANCE.md)，第三方声明见
-[`NOTICE`](NOTICE)，完整许可证见 [`LICENSE`](LICENSE)。
-
-提交改动前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)；安全问题请按
-[`SECURITY.md`](SECURITY.md) 私下报告，不要在公开 Issue 中上传蓝牙抓包或敏感日志。
+逐文件来源见 [`SOURCE_PROVENANCE.md`](SOURCE_PROVENANCE.md)，第三方声明见 [`NOTICE`](NOTICE)，
+许可证见 [`LICENSE`](LICENSE)。贡献前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)；安全问题请按
+[`SECURITY.md`](SECURITY.md) 私下报告。

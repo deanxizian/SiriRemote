@@ -12,10 +12,27 @@ FULL_ROOT="$WORK/full-root"
 FULL_SCRIPTS="$WORK/full-scripts"
 UNINSTALL_SCRIPTS="$WORK/uninstall-scripts"
 COMPONENTS_PLIST="$WORK/full-components.plist"
-FULL_PKG="$OUT/SiriRemote-Full-Setup.pkg"
-UNINSTALL_PKG="$OUT/SiriRemote-Complete-Uninstall.pkg"
+RELEASE_PREFIX="SiriRemote-$VERSION"
+FULL_NAME="$RELEASE_PREFIX-Full-Setup.pkg"
+UNINSTALL_NAME="$RELEASE_PREFIX-Complete-Uninstall.pkg"
+CHECKSUM_NAME="$RELEASE_PREFIX-SHA256SUMS.txt"
+FULL_PKG="$OUT/$FULL_NAME"
+UNINSTALL_PKG="$OUT/$UNINSTALL_NAME"
+FULL_UNSIGNED_PKG="$WORK/$RELEASE_PREFIX-Full-Setup-unsigned.pkg"
+UNINSTALL_UNSIGNED_PKG="$WORK/$RELEASE_PREFIX-Complete-Uninstall-unsigned.pkg"
 MACOS_MIN="${SIRIREMOTE_MACOS_MIN:-13.0}"
 INSTALLER_HELPER_SIGN_IDENTITY="${SIRIREMOTE_SIGN_IDENTITY:-Developer ID Application: ZIAN XI (96M7FW2XLU)}"
+INSTALLER_SIGN_IDENTITY="${SIRIREMOTE_INSTALLER_SIGN_IDENTITY:-Developer ID Installer: ZIAN XI (96M7FW2XLU)}"
+CODE_SIGN_TIMESTAMP="${SIRIREMOTE_CODESIGN_TIMESTAMP:-none}"
+
+case "$CODE_SIGN_TIMESTAMP" in
+    none) CODE_SIGN_TIMESTAMP_ARGS=(--timestamp=none) ;;
+    secure) CODE_SIGN_TIMESTAMP_ARGS=(--timestamp) ;;
+    *)
+        echo "SIRIREMOTE_CODESIGN_TIMESTAMP must be 'none' or 'secure'" >&2
+        exit 2
+        ;;
+esac
 
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || {
     echo "package version must be numeric: $VERSION" >&2
@@ -28,6 +45,11 @@ need "$ROOT/mic/driver/SiriRemoteAudio.driver"
 need "$ROOT/mic/router/SiriRemoteAudioRouter"
 need "$ROOT/mic/captured/SiriRemoteCapture"
 need "$ROOT/mic/captured/com.deanxi.siriremote.capture.plist"
+/usr/bin/security find-identity -v -p basic \
+    | /usr/bin/grep -Fq "\"$INSTALLER_SIGN_IDENTITY\"" || {
+    echo "required Installer signing identity is unavailable: $INSTALLER_SIGN_IDENTITY" >&2
+    exit 1
+}
 
 /bin/rm -rf "$WORK" "$OUT"
 /bin/mkdir -p "$FULL_ROOT/Applications" \
@@ -93,9 +115,9 @@ xcrun clang -O2 -Wall -Wextra -Werror \
     -mmacosx-version-min="$MACOS_MIN" "$ROOT/dist/process_verifier.c" \
     -o "$FULL_SCRIPTS/SiriRemoteProcessVerifier"
 "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog" --self-test
-/usr/bin/codesign --force --options runtime --timestamp=none \
+/usr/bin/codesign --force --options runtime "${CODE_SIGN_TIMESTAMP_ARGS[@]}" \
     --sign "$INSTALLER_HELPER_SIGN_IDENTITY" "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog"
-/usr/bin/codesign --force --options runtime --timestamp=none \
+/usr/bin/codesign --force --options runtime "${CODE_SIGN_TIMESTAMP_ARGS[@]}" \
     --sign "$INSTALLER_HELPER_SIGN_IDENTITY" "$FULL_SCRIPTS/SiriRemoteProcessVerifier"
 xcrun clang -O2 -Wall -Wextra -Werror "$ROOT/dist/shm_cleanup.c" \
     -o "$UNINSTALL_SCRIPTS/SiriRemoteShmCleanup"
@@ -106,9 +128,9 @@ xcrun clang -O2 -Wall -Wextra -Werror "$ROOT/dist/shm_cleanup.c" \
 /usr/bin/pkgbuild --root "$FULL_ROOT" --scripts "$FULL_SCRIPTS" \
     --component-plist "$COMPONENTS_PLIST" \
     --identifier com.deanxi.siriremote.full --version "$VERSION" \
-    --install-location / --ownership recommended "$FULL_PKG"
+    --install-location / --ownership recommended "$FULL_UNSIGNED_PKG"
 /usr/bin/pkgbuild --nopayload --scripts "$UNINSTALL_SCRIPTS" \
-    --identifier com.deanxi.siriremote.uninstall --version "$VERSION" "$UNINSTALL_PKG"
+    --identifier com.deanxi.siriremote.uninstall --version "$VERSION" "$UNINSTALL_UNSIGNED_PKG"
 
 # macOS 26 attaches a protected com.apple.provenance xattr even to locally-created files. pkgbuild
 # serializes that metadata as zero-byte `._*` AppleDouble entries despite COPYFILE_DISABLE. Repack
@@ -145,21 +167,30 @@ repack_without_appledouble() {
     /bin/mv "$cleaned" "$package"
 }
 
-repack_without_appledouble "$FULL_PKG" "$FULL_ROOT"
-repack_without_appledouble "$UNINSTALL_PKG"
+repack_without_appledouble "$FULL_UNSIGNED_PKG" "$FULL_ROOT"
+repack_without_appledouble "$UNINSTALL_UNSIGNED_PKG"
 
-/usr/sbin/pkgutil --expand-full "$FULL_PKG" "$WORK/full-expanded"
-/usr/sbin/pkgutil --expand-full "$UNINSTALL_PKG" "$WORK/uninstall-expanded"
+/usr/sbin/pkgutil --expand-full "$FULL_UNSIGNED_PKG" "$WORK/full-expanded"
+/usr/sbin/pkgutil --expand-full "$UNINSTALL_UNSIGNED_PKG" "$WORK/uninstall-expanded"
 [ -f "$WORK/full-expanded/Scripts/preinstall" ]
 [ -f "$WORK/full-expanded/Scripts/postinstall" ]
 [ -f "$WORK/uninstall-expanded/Scripts/postinstall" ]
 [ -z "$(/usr/bin/find "$WORK/full-expanded" "$WORK/uninstall-expanded" -name '._*' -print -quit)" ]
 
+/usr/bin/productsign --sign "$INSTALLER_SIGN_IDENTITY" --timestamp \
+    "$FULL_UNSIGNED_PKG" "$FULL_PKG"
+/usr/bin/productsign --sign "$INSTALLER_SIGN_IDENTITY" --timestamp \
+    "$UNINSTALL_UNSIGNED_PKG" "$UNINSTALL_PKG"
+/usr/sbin/pkgutil --check-signature "$FULL_PKG"
+/usr/sbin/pkgutil --check-signature "$UNINSTALL_PKG"
+
 (
     cd "$OUT"
-    /usr/bin/shasum -a 256 SiriRemote-Full-Setup.pkg SiriRemote-Complete-Uninstall.pkg
-) > "$OUT/SHA256SUMS.txt"
+    /usr/bin/shasum -a 256 "$FULL_NAME" "$UNINSTALL_NAME"
+) > "$OUT/$CHECKSUM_NAME"
 
 echo "✓ $FULL_PKG"
 echo "✓ $UNINSTALL_PKG"
-echo "⚠ PKG 未签名：本机安装可用，但尚未公证，不用于公开分发。"
+echo "✓ $OUT/$CHECKSUM_NAME"
+echo "✓ PKG signed with $INSTALLER_SIGN_IDENTITY"
+echo "⚠ PKG has not been notarized or stapled."
