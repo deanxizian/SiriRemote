@@ -406,6 +406,7 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
 
     const uint64_t t0 = mach_absolute_time();
     const double cycleNs = (double)kCycleFrames / kRate * 1e9;
+    uint64_t resumeWriteIndex = 0;
 
     for (unsigned k = 0; k < run->totalCycles; ++k)
     {
@@ -419,9 +420,26 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
         if (k == run->remoteStopCycle)
         { atomic_store_explicit(&gRemoteProducer.writing, 0, memory_order_release); }
         if (k == run->remoteResumeCycle)
-        { atomic_store_explicit(&gRemoteProducer.writing, 1, memory_order_release); }
+        {
+            resumeWriteIndex = atomic_load_explicit(&gRemoteProducer.shm->writeIndex,
+                                                    memory_order_acquire);
+            atomic_store_explicit(&gRemoteProducer.writing, 1, memory_order_release);
+        }
 
         mach_wait_until(t0 + ns_to_ticks((uint64_t)(cycleNs * (double)(k + 1))));
+
+        // After an intentional gap, assert recovery against PUBLISHED frames, not the time
+        // at which the writer thread was told to resume. A shared CI host can delay that
+        // thread while the consumer catches up on its wall-clock deadlines. Keep a two-chunk
+        // reserve and the existing 500 ms producer deadline; do not lower audio assertions.
+        // Phase 1 remains fully wall-clock paced to test the device clock and underruns;
+        // the release-gap silence assertions in phases 2/3 still run without this handshake.
+        if (run->remoteResumeCycle != kNoCycle && k >= run->remoteResumeCycle)
+        {
+            const uint64_t required = resumeWriteIndex +
+                (uint64_t)(k - run->remoteResumeCycle + 1) * kCycleFrames + 2 * kChunkFrames;
+            if (producer_wait_for_frames(&gRemoteProducer, required) != 0) { return -1; }
+        }
 
         Float64 ztsSample = 0; UInt64 ztsHost = 0, seed = 0;
         status = (*driver)->GetZeroTimeStamp(driver, kObjectID_Device, 1,
