@@ -119,7 +119,7 @@ static void *producer_main(void *arg)
 static int producer_open(SimProducer *p)
 {
     const mode_t previousMask = umask(0);
-    int fd = shm_open(p->name, O_CREAT | O_RDWR, 0666);
+    int fd = shm_open(p->name, O_CREAT | O_RDWR, 0600);
     umask(previousMask);
     if (fd < 0) { perror("shm_open"); return -1; }
     struct stat info = {0};
@@ -146,7 +146,9 @@ static int producer_open(SimProducer *p)
     atomic_store_explicit(&p->shm->readIndex, 0, memory_order_release);
     atomic_store_explicit(&p->shm->playbackStartFrame, 0, memory_order_release);
     atomic_store_explicit(&p->shm->generation, oldGeneration + 1, memory_order_release);
-    atomic_store_explicit(&p->shm->producerActive, 1, memory_order_release);
+    atomic_store_explicit(&p->shm->producerActive, oldGeneration + 1, memory_order_release);
+    atomic_store_explicit(&p->shm->playbackEndFrame, UINT64_MAX, memory_order_release);
+    atomic_store_explicit(&p->shm->leaseExpiresAt, UINT64_MAX, memory_order_release);
     p->written = 0;
     p->phase = 0.0f;
     return 0;
@@ -409,7 +411,9 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
     {
         if (k == run->remoteStartCycle)
         {
-            atomic_store_explicit(&gRemoteProducer.shm->producerActive, 1, memory_order_release);
+            atomic_store_explicit(&gRemoteProducer.shm->producerActive,
+                atomic_load_explicit(&gRemoteProducer.shm->generation, memory_order_acquire),
+                memory_order_release);
             atomic_store_explicit(&gRemoteProducer.writing, 1, memory_order_release);
         }
         if (k == run->remoteStopCycle)

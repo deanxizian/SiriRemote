@@ -4,9 +4,11 @@ cd "$(dirname "$0")/.."
 export COPYFILE_DISABLE=1
 
 ROOT="$PWD"
-VERSION="${1:-0.1.0}"
+VERSION="${1:-0.2.0}"
 APP_SOURCE="${SIRIREMOTE_APP_PATH:-$ROOT/app/SiriRemote.app}"
-OUT="$ROOT/dist/out"
+OUTPUT_NAME="${SIRIREMOTE_PACKAGE_OUTPUT_NAME:-out}"
+[[ "$OUTPUT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || exit 2
+OUT="$ROOT/dist/$OUTPUT_NAME"
 WORK="$ROOT/dist/build/package"
 FULL_ROOT="$WORK/full-root"
 FULL_SCRIPTS="$WORK/full-scripts"

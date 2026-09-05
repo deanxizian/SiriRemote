@@ -1,12 +1,8 @@
 //
 //  srm_captured.c — the "Siri Remote Mic" capture daemon.
 //
-//  Runs as root from a LaunchDaemon. SiriRemote publishes `...voice-demand` with its live PID while
-//  a physical Siri-button session is primed. Only that live-PID lease may run the heavy, privileged
-//  capture pipeline: PacketLogger (HCI capture) feeding SiriRemoteAudioRouter (voice extraction →
-//  shared-memory ring). The HAL consumer count is observed for diagnostics only because input
-//  methods may keep a virtual microphone open indefinitely. The PID is watched for exit so an App
-//  crash cannot leave capture running.
+//  Root supervisor with an authenticated XPC lease, protected PCM and asynchronous teardown.
+//  Disconnect revokes audio before stopping children; no caller-provided PID is trusted.
 //
 //  WHY ROOT: PacketLogger's HCI capture and the MobileBluetooth debug traces both require root.
 //  A LaunchDaemon is the standard way to grant exactly that, once, instead of a per-use password.
@@ -34,14 +30,13 @@
 #include <Security/Security.h>
 #include <limits.h>
 
-#include "srm_capture_demand.h"
+#include "SiriRemoteCaptureIPC.h"
+#include "srm_audio_owner.h"
 #include "srm_runtime_directory.h"
 
 extern char **environ;
 
 // --- fixed product paths -----------------------------------------------------------------------
-#define NOTIF_NAME    "com.deanxi.siriremote.audio.consumers"
-#define VOICE_NOTIF_NAME "com.deanxi.siriremote.audio.voice-demand"
 #define CAPTURE_READY_NOTIF_NAME "com.deanxi.siriremote.audio.capture-ready"
 #define CAPTURE_SERVICE_NOTIF_NAME "com.deanxi.siriremote.capture-service"
 #define RUNTIME_DIR   "/private/var/run/com.deanxi.siriremote"
@@ -57,20 +52,12 @@ extern char **environ;
 #define ROUTER_PATH   SUPPORT_DIR "/SiriRemoteAudioRouter"
 #define BT_DEBUG_DOMAIN "/Library/Preferences/com.apple.MobileBluetooth.debug"
 
-#define RESTART_BACKOFF_SECONDS 1
-#define CAPTURE_FILE_WAIT_ATTEMPTS 100
 
 static pid_t g_packetlogger = -1;
 static pid_t g_router = -1;
-static int   g_pipeline_up = 0;
 static int   g_hci_ready = 0;
-static dispatch_source_t g_restart_timer = NULL;
-static dispatch_source_t g_voice_process = NULL;
-static int      g_voice_token = 0;
 static int      g_capture_ready_token = -1;
 static int      g_capture_service_token = -1;
-static uint64_t g_virtual_consumers = 0;
-static pid_t    g_voice_pid = 0;
 
 static void logmsg(const char *fmt, ...)
 {
@@ -402,7 +389,7 @@ static pid_t spawn_packetlogger(char *const argv[])
     return spawn_child(PACKETLOGGER, argv);
 }
 
-static void stop_pipeline(void);
+
 
 // Enable the Bluetooth HCI debug traces PacketLogger needs to see the remote's voice notifications
 // (RawAudioTrace) and defeat the profile-required wall (HCISkipAuth). These reset on reboot, so the
@@ -456,309 +443,269 @@ static void prewarm_packetlogger(void)
     logmsg("PacketLogger pre-warmed (initial-bytes=%lld)", (long long)observed_size);
 }
 
-static void start_pipeline(void)
+
+typedef enum { PipelineIdle, PipelinePreparing, PipelineCapturing, PipelineStopping } PipelinePhase;
+static PipelinePhase g_phase;
+static SRMSharedMemory *g_audio;
+static xpc_connection_t g_owner;
+static uint64_t g_owner_session, g_pipeline_generation;
+static _Atomic uint64_t g_operation_epoch;
+static dispatch_queue_t g_work_queue;
+static dispatch_source_t g_clock;
+static int g_work_busy, g_terminating;
+static uint64_t g_ticks_per_second, g_prepare_deadline, g_stop_deadline;
+static void reconcile_pipeline(void);
+
+static void update_clock(void)
 {
-    if (g_pipeline_up) return;
-    publish_capture_ready(0);
-    if (!packetlogger_available()) {
-        logmsg("PacketLogger missing — remote voice capture remains disabled");
-        return;
-    }
-    // Full Setup never bundles PacketLogger. If the user installs it after this daemon starts,
-    // prepare HCI capture lazily on the first real demand; no reboot or daemon reload is required.
-    if (!g_hci_ready) ensure_hci_traces();
-
-    g_pipeline_up = 1;
-    logmsg("demand active → starting capture pipeline");
-
-    if (mkdir(RUNTIME_DIR, 0700) != 0 && errno != EEXIST) {
-        logmsg("cannot create %s: %s", RUNTIME_DIR, strerror(errno));
-        g_pipeline_up = 0;
-        return;
-    }
-    (void)chmod(RUNTIME_DIR, 0700);
-    unlink(PKLG_PATH);
-    char *plargs[] = { "packetlogger", "convert", "-o", PKLG_PATH, NULL };
-    g_packetlogger = spawn_packetlogger(plargs);
-    if (g_packetlogger < 0) { g_pipeline_up = 0; return; }
-
-    // A created-but-empty file only proves that open(2) succeeded. Do not tell the App capture is
-    // ready until PacketLogger has attached to the live HCI stream and written at least one record.
-    int capture_file_ready = 0;
-    off_t initial_size = 0;
-    for (int i = 0; i < CAPTURE_FILE_WAIT_ATTEMPTS; ++i) {
-        struct stat st;
-        if (stat(PKLG_PATH, &st) == 0 && st.st_size > 0) {
-            capture_file_ready = 1;
-            initial_size = st.st_size;
-            break;
-        }
-        usleep(50 * 1000);
-    }
-    if (!capture_file_ready) {
-        logmsg("PacketLogger capture stayed empty for 5 seconds");
-        stop_pipeline();
-        return;
-    }
-
-    char *rargs[] = { "SiriRemoteAudioRouter", "--pklg", PKLG_PATH, NULL };
-    g_router = spawn_child(ROUTER_PATH, rargs);
-    if (g_router < 0) {
-        logmsg("router failed to start");
-        stop_pipeline();
-        return;
-    }
-    publish_capture_ready(1);
-    logmsg("pipeline ready (packetlogger=%d router=%d initial-bytes=%lld)",
-           g_packetlogger, g_router, (long long)initial_size);
+    int needed = g_owner != NULL || g_phase != PipelineIdle || g_work_busy;
+    dispatch_source_set_timer(g_clock,
+        needed ? dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC) : DISPATCH_TIME_FOREVER,
+        needed ? 20 * NSEC_PER_MSEC : DISPATCH_TIME_FOREVER, 2 * NSEC_PER_MSEC);
 }
-
+static void drop_owner(void)
+{
+    if (g_owner) xpc_release(g_owner);
+    g_owner = NULL;
+    g_owner_session = 0;
+}
 static void stop_pipeline(void)
 {
-    if (!g_pipeline_up) return;
-    g_pipeline_up = 0;
-    publish_capture_ready(0);
-    struct stat final_capture;
-    off_t final_size = stat(PKLG_PATH, &final_capture) == 0 ? final_capture.st_size : -1;
-    logmsg("demand idle → stopping capture pipeline (final-bytes=%lld)",
-           (long long)final_size);
-    // SIGKILL, and NEVER a blocking waitpid here. This handler runs on the main dispatch queue; an
-    // earlier version sent SIGINT then `waitpid(..., 0)` and hung the whole daemon when the router
-    // didn't exit promptly from its tail loop — a stuck teardown froze all future demand handling.
-    // SIGKILL can't be caught or delayed, and the SIGCHLD source below reaps the zombies async. The
-    // router/PacketLogger have no state worth flushing here (the .pklg is transient), so this is safe.
-    if (g_router > 0)       { kill(g_router, SIGKILL); g_router = -1; }
-    if (g_packetlogger > 0) { kill(g_packetlogger, SIGKILL); g_packetlogger = -1; }
-    unlink(PKLG_PATH);
-}
-
-static void cancel_restart_timer(void)
-{
-    if (g_restart_timer) {
-        dispatch_source_cancel(g_restart_timer);
-        g_restart_timer = NULL;
+    if (g_phase != PipelineStopping) {
+        atomic_fetch_add_explicit(&g_operation_epoch, 1, memory_order_acq_rel);
+        srm_audio_revoke(g_audio);
+        publish_capture_ready(0);
+        g_phase = PipelineStopping;
+        g_stop_deadline = mach_absolute_time() + g_ticks_per_second * 4 / 10;
+        if (g_router > 0) kill(g_router, SIGTERM);
+        if (g_packetlogger > 0) kill(g_packetlogger, SIGTERM);
+        logmsg("capture revoked; stopping children asynchronously");
     }
+    update_clock();
 }
-
-static int process_is_alive(pid_t pid)
+static void reap_child(pid_t *child)
 {
-    if (pid <= 0) return 0;
-    if (kill(pid, 0) == 0) return 1;
-    return errno == EPERM;
+    if (*child <= 0) return;
+    int status;
+    pid_t result = waitpid(*child, &status, WNOHANG);
+    if (result == *child || (result < 0 && errno == ECHILD)) *child = -1;
 }
-
-static int demand_is_active(void)
+static void clock_tick(void)
 {
-    return srm_capture_should_run(g_virtual_consumers, g_voice_pid,
-                                  process_is_alive(g_voice_pid));
-}
-
-static void schedule_pipeline_restart(void)
-{
-    if (g_restart_timer != NULL || !demand_is_active()) return;
-    g_restart_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                              dispatch_get_main_queue());
-    if (g_restart_timer == NULL) {
-        logmsg("cannot create pipeline restart timer");
-        return;
-    }
-    dispatch_source_set_timer(
-        g_restart_timer,
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)RESTART_BACKOFF_SECONDS * NSEC_PER_SEC),
-        DISPATCH_TIME_FOREVER,
-        (uint64_t)(0.1 * NSEC_PER_SEC)
-    );
-    dispatch_source_set_event_handler(g_restart_timer, ^{
-        cancel_restart_timer();
-        if (demand_is_active()) start_pipeline();
-    });
-    dispatch_resume(g_restart_timer);
-}
-
-static void reconcile_demand(void)
-{
-    if (demand_is_active()) {
-        start_pipeline();
-    } else {
-        cancel_restart_timer();
-        // The App clears its lease only after the 80 ms tail and Ring drain. There is no consumer
-        // renegotiation to debounce here, so release PacketLogger and the decoder immediately.
+    uint64_t now = mach_absolute_time();
+    pid_t old_router = g_router, old_packetlogger = g_packetlogger;
+    // Do not steal worker-owned validation/prewarm children from their waitpid.
+    reap_child(&g_router);
+    reap_child(&g_packetlogger);
+    if (g_phase != PipelineStopping &&
+        ((old_router > 0 && g_router < 0) || (old_packetlogger > 0 && g_packetlogger < 0))) {
+        logmsg("capture child exited; failing the current session");
+        drop_owner();
         stop_pipeline();
     }
-}
-
-// The HAL owns this count. Keep observing it for diagnostics and future drain telemetry, but never
-// use it to wake capture: Doubao and system speech services can hold input IO while completely idle.
-static void handle_virtual_demand(int token)
-{
-    uint64_t state = 0;
-    if (notify_get_state(token, &state) != NOTIFY_STATUS_OK) return;
-    if (state != g_virtual_consumers) {
-        g_virtual_consumers = state;
-        logmsg("virtual mic consumers=%llu (capture policy unchanged)",
-               (unsigned long long)state);
+    if (g_phase == PipelineStopping) {
+        if (now >= g_stop_deadline) {
+            if (g_router > 0) kill(g_router, SIGKILL);
+            if (g_packetlogger > 0) kill(g_packetlogger, SIGKILL);
+        }
+        if (g_router < 0 && g_packetlogger < 0 && !g_work_busy) {
+            unlink(PKLG_PATH);
+            g_phase = PipelineIdle;
+            if (g_terminating) exit(0);
+            reconcile_pipeline();
+        }
+    } else if (g_phase == PipelinePreparing && !g_work_busy && g_packetlogger > 0) {
+        struct stat info;
+        if (stat(PKLG_PATH, &info) == 0 && info.st_size > 0) {
+            char generation[32];
+            snprintf(generation, sizeof generation, "%llu", (unsigned long long)g_pipeline_generation);
+            char *args[] = { "SiriRemoteAudioRouter", "--pklg", PKLG_PATH,
+                             "--generation", generation, NULL };
+            g_router = spawn_child(ROUTER_PATH, args);
+            if (g_router > 0) {
+                g_phase = PipelineCapturing;
+                publish_capture_ready(1);
+                logmsg("pipeline ready (packetlogger=%d router=%d generation=%s)",
+                       g_packetlogger, g_router, generation);
+            } else { drop_owner(); stop_pipeline(); }
+        } else if (now >= g_prepare_deadline) {
+            logmsg("capture preparation deadline exceeded");
+            drop_owner();
+            stop_pipeline();
+        }
     }
+    if (g_owner && (g_phase == PipelinePreparing || g_phase == PipelineCapturing))
+        atomic_store_explicit(&g_audio->leaseExpiresAt, now + g_ticks_per_second / 2,
+                              memory_order_release);
+    if (!g_owner && g_phase == PipelineIdle && !g_work_busy) update_clock();
 }
-
-static void cancel_voice_process_watch(void)
+static void reconcile_pipeline(void)
 {
-    if (g_voice_process != NULL) {
-        dispatch_source_cancel(g_voice_process);
-        g_voice_process = NULL;
-    }
-}
-
-static void watch_voice_process(pid_t pid)
-{
-    cancel_voice_process_watch();
-    if (!process_is_alive(pid)) {
-        g_voice_pid = 0;
+    if (!g_owner) {
+        if (g_phase != PipelineIdle || g_work_busy) stop_pipeline();
         return;
     }
-    g_voice_process = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)pid,
-                                              DISPATCH_PROC_EXIT,
-                                              dispatch_get_main_queue());
-    if (g_voice_process == NULL) {
-        logmsg("cannot watch voice owner pid %d — demand will follow explicit release", pid);
-        return;
-    }
-    dispatch_source_set_event_handler(g_voice_process, ^{
-        if (g_voice_pid != pid) return;
-        logmsg("voice owner pid %d exited — releasing demand", pid);
-        g_voice_pid = 0;
-        cancel_voice_process_watch();
-        reconcile_demand();
+    if (g_phase != PipelineIdle || g_work_busy || g_terminating) return;
+    g_phase = PipelinePreparing;
+    g_work_busy = 1;
+    uint64_t operation = atomic_fetch_add_explicit(&g_operation_epoch, 1, memory_order_acq_rel) + 1;
+    g_prepare_deadline = mach_absolute_time() + g_ticks_per_second * 13 / 10;
+    update_clock();
+    // Expensive validation and child waits never block the control/XPC queue.
+    dispatch_async(g_work_queue, ^{
+        int valid = packetlogger_available();
+        if (valid && !g_hci_ready) ensure_hci_traces();
+        if (valid) valid = packetlogger_snapshot_is_trusted(PACKETLOGGER_APP);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            g_work_busy = 0;
+            if (operation != atomic_load_explicit(&g_operation_epoch, memory_order_acquire)
+                || !g_owner || g_terminating) { stop_pipeline(); return; }
+            if (!valid || mach_absolute_time() >= g_prepare_deadline) {
+                logmsg("capture unavailable or preparation deadline exceeded");
+                drop_owner();
+                stop_pipeline();
+                return;
+            }
+            g_pipeline_generation = srm_audio_begin(g_audio);
+            atomic_store_explicit(&g_audio->leaseExpiresAt,
+                                  mach_absolute_time() + g_ticks_per_second / 2, memory_order_release);
+            unlink(PKLG_PATH);
+            // The worker just authenticated this immutable, root-owned snapshot.
+            char *args[] = { "packetlogger", "convert", "-o", PKLG_PATH, NULL };
+            g_packetlogger = spawn_child(PACKETLOGGER, args);
+            if (g_packetlogger <= 0) { drop_owner(); stop_pipeline(); }
+        });
     });
-    dispatch_resume(g_voice_process);
 }
-
-// App-owned priming demand carries the owner PID so a crash cannot leave capture running.
-static void handle_voice_demand(int token)
+static void reply_snapshot(xpc_connection_t peer, xpc_object_t request, int accepted)
 {
-    uint64_t state = 0;
-    if (notify_get_state(token, &state) != NOTIFY_STATUS_OK) state = 0;
-    pid_t requested = state > 0 && state <= INT32_MAX ? (pid_t)state : 0;
-    if (!process_is_alive(requested)) requested = 0;
-    if (requested != g_voice_pid) {
-        g_voice_pid = requested;
-        watch_voice_process(requested);
-        logmsg("voice demand %s", requested > 0 ? "active" : "idle");
+    xpc_object_t reply = xpc_dictionary_create_reply(request);
+    if (!reply) return;
+    xpc_dictionary_set_bool(reply, "accepted", accepted);
+    xpc_dictionary_set_uint64(reply, "session", peer == g_owner ? g_owner_session : 0);
+    if (accepted) {
+        xpc_dictionary_set_bool(reply, "available", g_owner == peer &&
+                                g_phase != PipelineStopping && g_phase != PipelineIdle);
+        xpc_dictionary_set_uint64(reply, "generation",
+                                 atomic_load_explicit(&g_audio->generation, memory_order_acquire));
+        xpc_dictionary_set_bool(reply, "producerActive", srm_audio_active(g_audio));
+        xpc_dictionary_set_uint64(reply, "writeIndex",
+                                 atomic_load_explicit(&g_audio->writeIndex, memory_order_acquire));
+        xpc_dictionary_set_uint64(reply, "readIndex",
+                                 atomic_load_explicit(&g_audio->readIndex, memory_order_acquire));
+        xpc_dictionary_set_uint64(reply, "consumerCount",
+                                 atomic_load_explicit(&g_audio->consumerCount, memory_order_acquire));
+        xpc_dictionary_set_uint64(reply, "startIOEpoch",
+                                 atomic_load_explicit(&g_audio->startIOEpoch, memory_order_acquire));
     }
-    reconcile_demand();
+    xpc_connection_send_message(peer, reply);
+    xpc_release(reply);
 }
-
+static void accept_peer(xpc_connection_t peer)
+{
+    xpc_connection_set_target_queue(peer, dispatch_get_main_queue());
+    __block int authenticated = 0;
+    xpc_connection_set_event_handler(peer, ^(xpc_object_t message) {
+        if (xpc_get_type(message) == XPC_TYPE_ERROR) {
+            if (g_owner == peer) { drop_owner(); stop_pipeline(); }
+            return;
+        }
+        if (xpc_get_type(message) != XPC_TYPE_DICTIONARY) return;
+        const char *operation = xpc_dictionary_get_string(message, "operation");
+        if (!operation) { reply_snapshot(peer, message, 0); return; }
+        int snapshot = strcmp(operation, "snapshot") == 0;
+        // Cache only diagnostic access. Every mutation authenticates its actual message sender.
+        if ((!authenticated || !snapshot) && !srm_message_is_authorized(message, SRM_APP_REQUIREMENT)) {
+            reply_snapshot(peer, message, 0);
+            return;
+        }
+        authenticated = 1;
+        uint64_t session = xpc_dictionary_get_uint64(message, "session");
+        int accepted = 1;
+        if (strcmp(operation, "begin") == 0) {
+            if (!session || (g_owner && g_owner != peer)) accepted = 0;
+            else {
+                if (g_owner && session != g_owner_session) stop_pipeline();
+                if (!g_owner) { g_owner = peer; xpc_retain(peer); }
+                g_owner_session = session;
+                reconcile_pipeline();
+            }
+        } else if (strcmp(operation, "end") == 0) {
+            if (g_owner == peer && session == g_owner_session) { drop_owner(); stop_pipeline(); }
+        } else if (strcmp(operation, "seal") == 0) {
+            if (g_owner == peer && session == g_owner_session) {
+                uint64_t end = xpc_dictionary_get_uint64(message, "endFrame");
+                uint64_t written = atomic_load_explicit(&g_audio->writeIndex, memory_order_acquire);
+                uint64_t previous = atomic_load_explicit(&g_audio->playbackEndFrame, memory_order_acquire);
+                if (end > written) end = written;
+                if (end > previous) end = previous;
+                atomic_store_explicit(&g_audio->playbackEndFrame, end, memory_order_release);
+            } else accepted = 0;
+        } else if (!snapshot) accepted = 0;
+        reply_snapshot(peer, message, accepted);
+    });
+    xpc_connection_resume(peer);
+}
 static void terminate_daemon(void)
 {
+    g_terminating = 1;
     unlink(READY_PATH);
     publish_capture_service(0);
-    publish_capture_ready(0);
-    cancel_restart_timer();
+    drop_owner();
     stop_pipeline();
-    exit(0);
 }
-
 int main(void)
 {
     umask(077);
+    if (geteuid() != 0 || srm_prepare_runtime_directory(RUNTIME_DIR, 0) != 0 ||
+        (g_audio = srm_audio_prepare()) == NULL) {
+        logmsg("cannot prepare protected audio/runtime state: %s", strerror(errno));
+        return 1;
+    }
+    shm_unlink("/SiriRemoteAudio_v1");
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+    g_ticks_per_second = NSEC_PER_SEC * (uint64_t)timebase.denom / timebase.numer;
     signal(SIGTERM, SIG_IGN);
     signal(SIGINT, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
-
-    uint32_t service_rc = notify_register_check(
-        CAPTURE_SERVICE_NOTIF_NAME, &g_capture_service_token
-    );
-    if (service_rc == NOTIFY_STATUS_OK) publish_capture_service(0);
-    else {
-        g_capture_service_token = -1;
-        logmsg("notify_register_check(%s) failed: %u", CAPTURE_SERVICE_NOTIF_NAME, service_rc);
-    }
-
-    if (geteuid() != 0 || srm_prepare_runtime_directory(RUNTIME_DIR, 0) != 0) {
-        logmsg("cannot prepare secure runtime directory: %s", strerror(errno));
-        return 1;
-    }
-    unlink(READY_PATH);
-
-    dispatch_source_t sigterm = dispatch_source_create(
-        DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_main_queue()
-    );
-    dispatch_source_t sigint = dispatch_source_create(
-        DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0, dispatch_get_main_queue()
-    );
-    if (sigterm == NULL || sigint == NULL) {
-        logmsg("cannot create termination signal sources");
-        return 1;
-    }
-    dispatch_source_set_event_handler(sigterm, ^{ terminate_daemon(); });
-    dispatch_source_set_event_handler(sigint, ^{ terminate_daemon(); });
-    dispatch_resume(sigterm);
-    dispatch_resume(sigint);
-
-    logmsg("starting");
-    // This marker means launchd successfully started the signed service. PacketLogger pre-warming
-    // is an optimization, not an installer transaction: publish first so a cold framework load can
-    // continue in the daemon without holding PackageKit's postinstall script open.
+    g_work_queue = dispatch_queue_create("com.deanxi.siriremote.capture.prepare", DISPATCH_QUEUE_SERIAL);
+    g_clock = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(g_clock, ^{ clock_tick(); });
+    dispatch_source_set_timer(g_clock, DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
+    dispatch_resume(g_clock);
+    dispatch_source_t term = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0,
+                                                     dispatch_get_main_queue());
+    dispatch_source_t interrupt = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGINT, 0,
+                                                          dispatch_get_main_queue());
+    dispatch_source_set_event_handler(term, ^{ terminate_daemon(); });
+    dispatch_source_set_event_handler(interrupt, ^{ terminate_daemon(); });
+    dispatch_resume(term);
+    dispatch_resume(interrupt);
+    notify_register_check(CAPTURE_SERVICE_NOTIF_NAME, &g_capture_service_token);
+    notify_register_check(CAPTURE_READY_NOTIF_NAME, &g_capture_ready_token);
+    publish_capture_ready(0);
+    xpc_connection_t listener = xpc_connection_create_mach_service(
+        SRM_CAPTURE_SERVICE, dispatch_get_main_queue(), XPC_CONNECTION_MACH_SERVICE_LISTENER);
+    if (!listener) { logmsg("cannot create authenticated capture listener"); return 1; }
+    xpc_connection_set_event_handler(listener, ^(xpc_object_t event) {
+        if (xpc_get_type(event) == XPC_TYPE_CONNECTION) accept_peer(event);
+    });
+    xpc_connection_resume(listener);
     if (!publish_service_ready()) return 1;
-    if (!packetlogger_available()) {
-        logmsg("PacketLogger not installed — leaving Bluetooth HCI debug traces unchanged");
-    } else {
-        // One boot-time preparation avoids spending the 1.5-second Siri hold budget rewriting
-        // Bluetooth debug settings. PacketLogger and the decoder still remain stopped while idle.
-        ensure_hci_traces();
-        prewarm_packetlogger();
-    }
-
-    uint32_t ready_rc = notify_register_check(
-        CAPTURE_READY_NOTIF_NAME, &g_capture_ready_token
-    );
-    if (ready_rc == NOTIFY_STATUS_OK) publish_capture_ready(0);
-    else logmsg("notify_register_check(%s) failed: %u", CAPTURE_READY_NOTIF_NAME, ready_rc);
-
-    // Reap any child that dies on its own (e.g. PacketLogger quitting) so it can't linger as a
-    // zombie. If either half of a live pipeline dies, tear down its sibling and retry once after a
-    // fixed delay. The delay prevents a broken PacketLogger/router from creating a CPU-heavy loop.
-    dispatch_source_t sigchld = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGCHLD, 0,
-                                                       dispatch_get_main_queue());
-    dispatch_source_set_event_handler(sigchld, ^{
-        int status;
-        pid_t dead;
-        int pipeline_child_died = 0;
-        while ((dead = waitpid(-1, &status, WNOHANG)) > 0) {
-            if (dead == g_router)       { g_router = -1; pipeline_child_died = 1; }
-            if (dead == g_packetlogger) { g_packetlogger = -1; pipeline_child_died = 1; }
-        }
-        if (pipeline_child_died && g_pipeline_up) {
-            logmsg("capture pipeline exited unexpectedly — restarting after backoff");
-            stop_pipeline();
-            schedule_pipeline_restart();
-        }
+    publish_capture_service(1);
+    logmsg("protected audio ready; authenticated capture listener started");
+    g_work_busy = 1;
+    update_clock();
+    dispatch_async(g_work_queue, ^{
+        if (packetlogger_available()) { ensure_hci_traces(); prewarm_packetlogger(); }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            g_work_busy = 0;
+            if (g_phase == PipelineStopping) return;
+            reconcile_pipeline();
+            update_clock();
+        });
     });
-    signal(SIGCHLD, SIG_DFL);   // let the dispatch source observe; default disposition delivers it
-    dispatch_resume(sigchld);
-
-    int token = 0;
-    uint32_t rc = notify_register_dispatch(NOTIF_NAME, &token, dispatch_get_main_queue(), ^(int t) {
-        handle_virtual_demand(t);
-    });
-    if (rc != NOTIFY_STATUS_OK) {
-        logmsg("notify_register_dispatch(%s) failed: %u — consumer diagnostics unavailable",
-               NOTIF_NAME, rc);
-    }
-
-    uint32_t voice_rc = notify_register_dispatch(VOICE_NOTIF_NAME, &g_voice_token,
-                                                  dispatch_get_main_queue(), ^(int t) {
-        handle_voice_demand(t);
-    });
-    if (voice_rc != NOTIFY_STATUS_OK) {
-        logmsg("notify_register_dispatch(%s) failed: %u — App-owned capture demand is unavailable",
-               VOICE_NOTIF_NAME, voice_rc);
-    }
-
-    if (voice_rc == NOTIFY_STATUS_OK) publish_capture_service(1);
-    if (rc == NOTIFY_STATUS_OK) handle_virtual_demand(token);
-    if (voice_rc == NOTIFY_STATUS_OK) handle_voice_demand(g_voice_token);
-    logmsg("watching voice demand on %s (consumer telemetry: %s)", VOICE_NOTIF_NAME,
-           rc == NOTIFY_STATUS_OK ? NOTIF_NAME : "unavailable");
     dispatch_main();
     return 0;
 }

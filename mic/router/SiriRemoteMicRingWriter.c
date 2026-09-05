@@ -4,6 +4,7 @@
 #include "SiriRemoteMicRingWriter.h"
 
 #include <errno.h>
+#include <dispatch/dispatch.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -15,10 +16,13 @@
 #include <unistd.h>
 
 #include "../driver/SiriRemoteMicShared.h"
+#include "../driver/SiriRemoteAudioAccess.h"
 
 static int gFileDescriptor = -1;
 static SRMSharedMemory *gShared = NULL;
 static uint64_t gWriteIndex = 0;
+static uint64_t gGeneration = 0;
+static dispatch_source_t gParentWatch;
 static char gLastError[256] = {0};
 
 static void set_error(const char *format, ...)
@@ -29,41 +33,20 @@ static void set_error(const char *format, ...)
     va_end(arguments);
 }
 
-int srm_ring_writer_open(void)
+int srm_ring_writer_open(uint64_t generation)
 {
     if (gShared != NULL) { return 0; }
 
-    // macOS POSIX shm objects do not support fchmod. Clear the mask only around the
-    // first open so _coreaudiod can map a newly-created object read-only.
-    const mode_t previousMask = umask(0);
-    const int descriptor = shm_open(SRM_SHM_NAME, O_CREAT | O_RDWR, 0666);
-    umask(previousMask);
+    const int descriptor = shm_open(SRM_SHM_NAME, O_RDWR, 0);
     if (descriptor < 0)
     {
         set_error("shm_open(%s): %s", SRM_SHM_NAME, strerror(errno));
         return -1;
     }
 
-    struct stat information = {0};
-    if (fstat(descriptor, &information) != 0)
+    if (generation == 0 || srm_audio_validate(descriptor, 0, srm_audio_group(), 0660) != 0)
     {
         set_error("fstat(%s): %s", SRM_SHM_NAME, strerror(errno));
-        close(descriptor);
-        return -1;
-    }
-    if (information.st_size == 0)
-    {
-        if (ftruncate(descriptor, (off_t)sizeof(SRMSharedMemory)) != 0)
-        {
-            set_error("ftruncate(%s): %s", SRM_SHM_NAME, strerror(errno));
-            close(descriptor);
-            return -1;
-        }
-    }
-    else if (information.st_size < (off_t)sizeof(SRMSharedMemory))
-    {
-        set_error("shared-memory object is too small: %lld < %zu",
-                  (long long)information.st_size, sizeof(SRMSharedMemory));
         close(descriptor);
         return -1;
     }
@@ -77,27 +60,18 @@ int srm_ring_writer_open(void)
         return -1;
     }
 
-    // Publish an inactive, empty, fully-described generation. Never unlink/recreate the object:
-    // coreaudiod may already have this exact kernel object mapped.
-    atomic_store_explicit(&shared->producerActive, 0, memory_order_release);
-    const uint64_t previousGeneration =
-        (shared->magic == SRM_MAGIC && shared->version == SRM_VERSION)
-            ? atomic_load_explicit(&shared->generation, memory_order_acquire)
-            : 0;
-    shared->magic = SRM_MAGIC;
-    shared->version = SRM_VERSION;
-    shared->sampleRate = SRM_SAMPLE_RATE;
-    shared->channels = SRM_CHANNELS;
-    shared->ringFrames = SRM_RING_FRAMES;
-    memset(shared->ring, 0, sizeof(shared->ring));
-    atomic_store_explicit(&shared->writeIndex, 0, memory_order_release);
-    atomic_store_explicit(&shared->readIndex, 0, memory_order_release);
-    atomic_store_explicit(&shared->playbackStartFrame, 0, memory_order_release);
-    atomic_store_explicit(&shared->generation, previousGeneration + 1, memory_order_release);
+    if (shared->magic != SRM_MAGIC || shared->version != SRM_VERSION ||
+        atomic_load_explicit(&shared->generation, memory_order_acquire) != generation) {
+        set_error("capture generation was revoked");
+        munmap(shared, sizeof(*shared));
+        close(descriptor);
+        return -1;
+    }
 
     gFileDescriptor = descriptor;
     gShared = shared;
     gWriteIndex = 0;
+    gGeneration = generation;
     gLastError[0] = '\0';
     return 0;
 }
@@ -106,13 +80,20 @@ void srm_ring_writer_set_active(int active)
 {
     if (gShared != NULL)
     {
-        atomic_store_explicit(&gShared->producerActive, active != 0, memory_order_release);
+        if (active) {
+            atomic_store_explicit(&gShared->producerActive, gGeneration, memory_order_release);
+        } else {
+            uint64_t expected = gGeneration;
+            atomic_compare_exchange_strong_explicit(&gShared->producerActive, &expected, 0,
+                                                    memory_order_acq_rel, memory_order_acquire);
+        }
     }
 }
 
 int srm_ring_writer_write_int16(const int16_t *samples, size_t frameCount)
 {
-    if (gShared == NULL || samples == NULL)
+    if (gShared == NULL || samples == NULL ||
+        atomic_load_explicit(&gShared->generation, memory_order_acquire) != gGeneration)
     {
         set_error("ring writer is not open");
         return -1;
@@ -147,7 +128,7 @@ void srm_ring_writer_close(void)
 {
     if (gShared != NULL)
     {
-        atomic_store_explicit(&gShared->producerActive, 0, memory_order_release);
+        srm_ring_writer_set_active(0);
         munmap(gShared, sizeof(*gShared));
         gShared = NULL;
     }
@@ -163,7 +144,7 @@ static void signal_cleanup(int signalNumber)
 {
     if (gShared != NULL)
     {
-        atomic_store_explicit(&gShared->producerActive, 0, memory_order_release);
+        srm_ring_writer_set_active(0);
     }
     _exit(128 + signalNumber);
 }
@@ -177,4 +158,13 @@ void srm_ring_writer_install_signal_cleanup(void)
     (void)sigaction(SIGINT, &action, NULL);
     (void)sigaction(SIGTERM, &action, NULL);
     (void)sigaction(SIGHUP, &action, NULL);
+    pid_t parent = getppid();
+    if (parent <= 1) signal_cleanup(SIGTERM);
+    gParentWatch = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)parent,
+                                          DISPATCH_PROC_EXIT,
+                                          dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    if (gParentWatch) {
+        dispatch_source_set_event_handler(gParentWatch, ^{ signal_cleanup(SIGTERM); });
+        dispatch_resume(gParentWatch);
+    }
 }

@@ -10,7 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-int srm_ring_writer_open(void);
+int srm_ring_writer_open(uint64_t generation);
 void srm_ring_writer_close(void);
 void srm_ring_writer_set_active(int active);
 int srm_ring_writer_write_int16(const int16_t *samples, size_t frame_count);

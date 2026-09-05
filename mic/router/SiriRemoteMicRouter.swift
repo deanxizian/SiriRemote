@@ -16,12 +16,18 @@ private struct RouterOptions {
     var replayRealtime = false
     var expectedFrames: Int?
     var quiet = false
+    var generation: UInt64 = 0
 
     static func parse(_ arguments: [String]) throws -> RouterOptions {
         var options = RouterOptions()
         var index = 0
         while index < arguments.count {
             switch arguments[index] {
+            case "--generation":
+                index += 1
+                guard index < arguments.count, let generation = UInt64(arguments[index]),
+                      generation != 0 else { throw RouterError.usage("invalid generation") }
+                options.generation = generation
             case "--input":
                 index += 1
                 guard index < arguments.count else { throw RouterError.usage("--input needs a path") }
@@ -57,6 +63,9 @@ private struct RouterOptions {
         }
         if options.inputPath != nil && options.pklgPath != nil {
             throw RouterError.usage("--input and --pklg are mutually exclusive")
+        }
+        if options.writeRing && options.generation == 0 {
+            throw RouterError.usage("ring writes require Capture's --generation; use --no-ring for offline tests")
         }
         return options
     }
@@ -109,7 +118,7 @@ private final class Router {
         self.decoder = decoder
 
         if options.writeRing {
-            guard srm_ring_writer_open() == 0 else {
+            guard srm_ring_writer_open(options.generation) == 0 else {
                 throw RouterError.runtime(String(cString: srm_ring_writer_last_error()))
             }
             srm_ring_writer_install_signal_cleanup()
@@ -280,6 +289,7 @@ private func printUsage() {
       (stdin)            Read `packetlogger convert -s -f nhdr` text lines from a pipe.
 
       --exit-on-eof      With --pklg, stop at end-of-file instead of tailing (offline replay).
+      --generation N    Capture-owned audio lease (required unless --no-ring).
     """)
 }
 

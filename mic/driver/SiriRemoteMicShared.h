@@ -11,9 +11,9 @@
 #include <stdatomic.h>
 
 // POSIX names on macOS must start with '/' and remain short.
-#define SRM_SHM_NAME     "/SiriRemoteAudio_v1"
+#define SRM_SHM_NAME     "/SiriRemoteAudio_v2"
 #define SRM_MAGIC        0x53524131u   // 'SRA1'
-#define SRM_VERSION      1u
+#define SRM_VERSION      2u
 #define SRM_SAMPLE_RATE  48000u
 #define SRM_CHANNELS     2u
 #define SRM_RING_FRAMES  65536u
@@ -26,11 +26,14 @@ typedef struct {
     uint32_t          ringFrames;
     uint32_t          _reserved;
 
-    // Producer-owned session state.
+    // Supervisor-owned generation/lease/end; Router owns active token and PCM write progress.
     _Atomic uint64_t  generation;
-    _Atomic uint32_t  producerActive;
-    _Atomic uint32_t  _producerPad;
+    // The active value is a generation token, not a boolean. A revoked/late writer can never
+    // reactivate a newer generation, even if it races the supervisor's cancellation.
+    _Atomic uint64_t  producerActive;
     _Atomic uint64_t  writeIndex;
+    _Atomic uint64_t  playbackEndFrame; // UINT64_MAX until the owner seals the tail
+    _Atomic uint64_t  leaseExpiresAt;   // mach absolute time; silence if the supervisor dies
 
     // Consumer-owned state. These are diagnostics/drain signals only; audio
     // rendering remains a pure function of CoreAudio's input sample time.

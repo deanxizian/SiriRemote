@@ -22,11 +22,15 @@ if [ "${SIRIREMOTE_COMPILE_ONLY:-0}" = "1" ]; then
     CAPTURE_OUTPUT="$CAPTURE_TEST_DIR/SiriRemoteCapture"
 fi
 clang -O2 -Wall -Wextra -Werror \
-    srm_capture_demand_test.c -o "$CAPTURE_TEST_DIR/srm_capture_demand_test"
-"$CAPTURE_TEST_DIR/srm_capture_demand_test"
-clang -O2 -Wall -Wextra -Werror \
     srm_runtime_directory_test.c -o "$CAPTURE_TEST_DIR/srm_runtime_directory_test"
 "$CAPTURE_TEST_DIR/srm_runtime_directory_test"
+clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    srm_audio_security_test.c -framework CoreFoundation -framework Security \
+    -o "$CAPTURE_TEST_DIR/srm_audio_security_test"
+"$CAPTURE_TEST_DIR/srm_audio_security_test"
+clang -O2 -Wall -Wextra -Werror srm_capture_auth_test.c \
+    -framework CoreFoundation -framework Security -o "$CAPTURE_TEST_DIR/srm_capture_auth_test"
+"$CAPTURE_TEST_DIR/srm_capture_auth_test"
 clang -O2 -Wall -Wextra -Werror \
     -isysroot "$SDK_PATH" \
     -mmacosx-version-min="$MACOS_MIN" \

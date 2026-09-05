@@ -5,7 +5,13 @@
 
 int main(void)
 {
-    if (shm_unlink("/SiriRemoteAudio_v1") == 0 || errno == ENOENT) return 0;
-    fprintf(stderr, "SiriRemote shared-memory cleanup failed: %s\n", strerror(errno));
-    return 1;
+    const char *names[] = { "/SiriRemoteAudio_v1", "/SiriRemoteAudio_v2" };
+    int failed = 0;
+    for (unsigned i = 0; i < sizeof names / sizeof names[0]; ++i) {
+        if (shm_unlink(names[i]) != 0 && errno != ENOENT) {
+            fprintf(stderr, "SiriRemote shared-memory cleanup failed: %s\n", strerror(errno));
+            failed = 1;
+        }
+    }
+    return failed;
 }

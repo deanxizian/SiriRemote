@@ -12,6 +12,16 @@ started only while a real Siri-button session requests it; idle SiriRemote does 
 or the decoder. There is no built-in microphone feeder, playback monitor, cloud transcription or
 standalone speech-to-text service.
 
+The App controls Capture through `com.deanxi.siriremote.capture` XPC. Both sides verify the actual
+message sender's code signature (product identifier and Team ID); a claimed PID is never authority.
+PCM uses a root-owned `_coreaudiod`-group `0660` ring; the App receives counters, not audio.
+On stop/disconnect, Capture revokes the generation first, sends SIGTERM, reaps asynchronously and
+only escalates surviving children to SIGKILL after 400 ms. The next producer starts after reaping.
+PacketLogger is prewarmed once at service startup, then runs only during a Siri-button lease.
+
+For offline parser work, use Router's `--no-ring --pklg FILE --exit-on-eof`. Production ring writes
+require the root service's current `--generation`; there is no independent unprivileged producer.
+
 Component builds:
 
 ```sh

@@ -47,6 +47,7 @@ swiftc \
     SiriRemoteMicRouter.swift SiriRemoteMicRingWriter.o \
     -o SiriRemoteAudioRouter
 
+if [ "${SIRIREMOTE_COMPILE_ONLY:-0}" != "1" ]; then
 security find-identity -v -p codesigning | grep -Fq "\"$SIGN_IDENTITY\"" || {
     echo "required signing identity is unavailable: $SIGN_IDENTITY" >&2
     exit 1
@@ -54,6 +55,7 @@ security find-identity -v -p codesigning | grep -Fq "\"$SIGN_IDENTITY\"" || {
 codesign --force --options runtime "${CODE_SIGN_TIMESTAMP_ARGS[@]}" \
     --sign "$SIGN_IDENTITY" SiriRemoteAudioRouter
 codesign --verify --strict --verbose=2 SiriRemoteAudioRouter
+fi
 
 swiftc \
     -warnings-as-errors \
