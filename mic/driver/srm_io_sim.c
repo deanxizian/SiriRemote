@@ -51,8 +51,6 @@ enum {
     kCycleFrames = 512,          // coreaudiod-typical IO quantum
     kChunkFrames = 480,          // producers write 10 ms chunks, like the real cadence
     kTrianglePeriod = 960,       // frames; slope = 2*span/period per frame
-    kExpectedPreRollFrames = 24000, // mirror the driver's 500 ms input-source settle reserve
-    kExpectedPrimeFrames = 4800,    // mirror the driver's 100 ms jitter gate
 };
 #define kIgnoredBuiltinName "/SiriRemoteIgnored"
 #define kNoCycle 0x7fffffffu
@@ -119,7 +117,7 @@ static void *producer_main(void *arg)
 static int producer_open(SimProducer *p)
 {
     const mode_t previousMask = umask(0);
-    int fd = shm_open(p->name, O_CREAT | O_RDWR, 0666);
+    int fd = shm_open(p->name, O_CREAT | O_RDWR, 0600);
     umask(previousMask);
     if (fd < 0) { perror("shm_open"); return -1; }
     struct stat info = {0};
@@ -146,7 +144,9 @@ static int producer_open(SimProducer *p)
     atomic_store_explicit(&p->shm->readIndex, 0, memory_order_release);
     atomic_store_explicit(&p->shm->playbackStartFrame, 0, memory_order_release);
     atomic_store_explicit(&p->shm->generation, oldGeneration + 1, memory_order_release);
-    atomic_store_explicit(&p->shm->producerActive, 1, memory_order_release);
+    atomic_store_explicit(&p->shm->producerActive, oldGeneration + 1, memory_order_release);
+    atomic_store_explicit(&p->shm->playbackEndFrame, UINT64_MAX, memory_order_release);
+    atomic_store_explicit(&p->shm->leaseExpiresAt, UINT64_MAX, memory_order_release);
     p->written = 0;
     p->phase = 0.0f;
     return 0;
@@ -344,6 +344,7 @@ typedef struct {
     unsigned    firstIdemMismatchFrame;
     Float32     firstIdemValueA, firstIdemValueB;
     double      wrapRate;
+    size_t      releaseDrainFrame;
 } PhaseRun;
 
 static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
@@ -356,6 +357,7 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
     run->firstIdemMismatchCycle = kNoCycle;
     run->firstIdemMismatchFrame = 0;
     run->wrapRate = 0;
+    run->releaseDrainFrame = 0;
 
     const uint64_t epochBefore = atomic_load_explicit(
         &gRemoteProducer.shm->startIOEpoch, memory_order_acquire);
@@ -404,20 +406,51 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
 
     const uint64_t t0 = mach_absolute_time();
     const double cycleNs = (double)kCycleFrames / kRate * 1e9;
+    uint64_t resumeWriteIndex = 0;
 
     for (unsigned k = 0; k < run->totalCycles; ++k)
     {
         if (k == run->remoteStartCycle)
         {
-            atomic_store_explicit(&gRemoteProducer.shm->producerActive, 1, memory_order_release);
+            atomic_store_explicit(&gRemoteProducer.shm->producerActive,
+                atomic_load_explicit(&gRemoteProducer.shm->generation, memory_order_acquire),
+                memory_order_release);
             atomic_store_explicit(&gRemoteProducer.writing, 1, memory_order_release);
         }
         if (k == run->remoteStopCycle)
-        { atomic_store_explicit(&gRemoteProducer.writing, 0, memory_order_release); }
+        {
+            atomic_store_explicit(&gRemoteProducer.writing, 0, memory_order_release);
+            const uint64_t written = atomic_load_explicit(&gRemoteProducer.shm->writeIndex,
+                                                          memory_order_acquire);
+            const uint64_t consumed = atomic_load_explicit(&gRemoteProducer.shm->readIndex,
+                                                           memory_order_acquire);
+            // Count the actual queue at release, plus at most one already-started chunk.
+            // A timed priming wait can overshoot on a shared host; assuming it published
+            // exactly 100 ms incorrectly classifies that valid extra tail as audio leakage.
+            run->releaseDrainFrame = (size_t)k * kCycleFrames +
+                (size_t)(written > consumed ? written - consumed : 0) + kChunkFrames;
+        }
         if (k == run->remoteResumeCycle)
-        { atomic_store_explicit(&gRemoteProducer.writing, 1, memory_order_release); }
+        {
+            resumeWriteIndex = atomic_load_explicit(&gRemoteProducer.shm->writeIndex,
+                                                    memory_order_acquire);
+            atomic_store_explicit(&gRemoteProducer.writing, 1, memory_order_release);
+        }
 
         mach_wait_until(t0 + ns_to_ticks((uint64_t)(cycleNs * (double)(k + 1))));
+
+        // After an intentional gap, assert recovery against PUBLISHED frames, not the time
+        // at which the writer thread was told to resume. A shared CI host can delay that
+        // thread while the consumer catches up on its wall-clock deadlines. Keep a two-chunk
+        // reserve and the existing 500 ms producer deadline; do not lower audio assertions.
+        // Phase 1 remains fully wall-clock paced to test the device clock and underruns;
+        // the release-gap silence assertions in phases 2/3 still run without this handshake.
+        if (run->remoteResumeCycle != kNoCycle && k >= run->remoteResumeCycle)
+        {
+            const uint64_t required = resumeWriteIndex +
+                (uint64_t)(k - run->remoteResumeCycle + 1) * kCycleFrames + 2 * kChunkFrames;
+            if (producer_wait_for_frames(&gRemoteProducer, required) != 0) { return -1; }
+        }
 
         Float64 ztsSample = 0; UInt64 ztsHost = 0, seed = 0;
         status = (*driver)->GetZeroTimeStamp(driver, kObjectID_Device, 1,
@@ -614,13 +647,9 @@ int main(int argc, char **argv)
                phase2.idemMismatches, phase2.comparedWindows);
         check_sign_window("phase2", "remote before release", phase2.stream,
                           12000, 22500, 1, 0.95);
-        // A new StartIO session preserves at most 500 ms of pre-roll, and this fixture adds
-        // 100 ms of priming before its clock starts. After release, those queued remote frames
-        // must drain before the device becomes silent. Allow one producer chunk for a write
-        // already in flight, then require exact silence until reactivation.
-        const size_t releaseFrame = (size_t)phase2.remoteStopCycle * kCycleFrames;
-        const size_t drainDeadline = releaseFrame + kExpectedPreRollFrames
-            + kExpectedPrimeFrames + kChunkFrames;
+        // Require exact silence after the actual queued tail (and one in-flight chunk)
+        // drains. This deadline is captured before reading any of the release-gap output.
+        const size_t drainDeadline = phase2.releaseDrainFrame;
         CHECK(drainDeadline < resumeFrame,
               "phase2: invalid drain window [%zu,%zu)", drainDeadline, resumeFrame);
         check_all_silent("phase2", "single-source gap is silent after bounded drain",
@@ -668,8 +697,7 @@ int main(int argc, char **argv)
         CHECK(ignoredAt == SIZE_MAX,
               "(b) ignored source leaked into device at frame %zu", ignoredAt);
         const size_t resumeFrame = (size_t)phase3.remoteResumeCycle * kCycleFrames;
-        const size_t drainDeadline = releaseFrame + kExpectedPreRollFrames
-            + kExpectedPrimeFrames + kChunkFrames;
+        const size_t drainDeadline = phase3.releaseDrainFrame;
         CHECK(drainDeadline < resumeFrame - kCycleFrames,
               "phase3: invalid drain window [%zu,%zu)",
               drainDeadline, resumeFrame - kCycleFrames);

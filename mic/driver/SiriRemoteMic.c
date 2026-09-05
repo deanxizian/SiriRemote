@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "SiriRemoteMicShared.h"
+#include "SiriRemoteAudioAccess.h"
 
 //==================================================================================================
 #pragma mark -
@@ -413,7 +414,7 @@ static Float32*                     gRingBuffer = NULL;
 #define kSRM_InputGain               1.0f
 
 typedef struct {
-    SRMSharedMemory*                shm;             // NULL until attached
+    _Atomic(SRMSharedMemory*)       shm;             // release-published by the control path
     const char*                     shmName;
     uint32_t                        primeFrames;     // engage gate; also the parked-backlog cap
     uint32_t                        reprimeFrames;   // cheap re-arm after a transient underrun
@@ -439,13 +440,15 @@ static SRMRingReader gSRM_Remote = {
 static Float32                      gSRM_RenderCache[kSRM_RenderCacheFrames * SRM_CHANNELS];
 static int64_t                      gSRM_RenderCacheTime = kSRM_CacheInvalidTime;
 static UInt32                       gSRM_RenderCacheFrameCount = 0;
+static uint64_t                     gSRM_RenderCacheGeneration = 0;
+static dispatch_source_t           gSRM_AttachRetry = NULL;
 
 static void SRM_AttachRing(SRMRingReader* r)
 {
     if (r->shm != NULL) { return; }
 
-    // The audio payload is read-only by convention. A writable mapping is needed only for the
-    // atomic readIndex/consumer diagnostics used by the App's tail-drain state machine.
+    // The kernel restricts this object to root and the CoreAudio group. The HAL updates only
+    // readIndex/consumer counters; the App receives those through authenticated helper IPC.
     int fd = shm_open(r->shmName, O_RDWR, 0);
     if (fd < 0)
     {
@@ -456,11 +459,12 @@ static void SRM_AttachRing(SRMRingReader* r)
         return;
     }
 
-    struct stat info = {0};
-    if (fstat(fd, &info) != 0 || info.st_size < (off_t)sizeof(SRMSharedMemory))
+    const Boolean isolatedTest = strcmp(r->shmName, SRM_SHM_NAME) != 0;
+    if (srm_audio_validate(fd, isolatedTest ? geteuid() : 0,
+                          isolatedTest ? getegid() : srm_audio_group(),
+                          isolatedTest ? 0600 : 0660) != 0)
     {
-        syslog(LOG_NOTICE, "SiriRemoteMic: invalid shm %s size=%lld errno=%d",
-               r->shmName, (long long)info.st_size, errno);
+        syslog(LOG_NOTICE, "SiriRemoteMic: untrusted shm %s errno=%d", r->shmName, errno);
         close(fd);
         return;                                       // do not risk SIGBUS on a short mapping
     }
@@ -476,7 +480,8 @@ static void SRM_AttachRing(SRMRingReader* r)
 
     // Park the reader on the producer's current position BEFORE publishing the mapping, so an
     // already-running IO thread can never anchor onto minutes of pre-attach backlog.
-    r->consumedTo = atomic_load_explicit(&m->writeIndex, memory_order_acquire);
+    const uint64_t written = atomic_load_explicit(&m->writeIndex, memory_order_acquire);
+    r->consumedTo = written > kSRM_PreRollFrames ? written - kSRM_PreRollFrames : 0;
     r->primed = false;
     r->gate = r->primeFrames;
     r->offset = 0;
@@ -547,7 +552,8 @@ static Boolean SRM_RingValid(const SRMRingReader* r)
         r->shm->channels == SRM_CHANNELS &&
         r->shm->ringFrames == SRM_RING_FRAMES &&
         kNumber_Of_Channels == SRM_CHANNELS &&
-        atomic_load_explicit(&r->shm->producerActive, memory_order_acquire) != 0;
+        srm_audio_active(r->shm) &&
+        atomic_load_explicit(&r->shm->leaseExpiresAt, memory_order_acquire) > mach_absolute_time();
 }
 
 // One writeIndex observation per cycle. A producer generation change resets the timeline while
@@ -556,7 +562,9 @@ static uint64_t SRM_RingObserve(SRMRingReader* r, int64_t inNow)
 {
     (void)inNow;
     const uint64_t generation = atomic_load_explicit(&r->shm->generation, memory_order_acquire);
-    const uint64_t w = atomic_load_explicit(&r->shm->writeIndex, memory_order_acquire);
+    uint64_t w = atomic_load_explicit(&r->shm->writeIndex, memory_order_acquire);
+    const uint64_t end = atomic_load_explicit(&r->shm->playbackEndFrame, memory_order_acquire);
+    if (w > end) w = end;
     if (generation != r->generation || w < r->consumedTo)
     {
         r->generation = generation;
@@ -582,7 +590,9 @@ static UInt32 SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
     // jitter, then anchor this cycle's timeline position to the oldest unplayed ring frame.
     // The mapping then stays FIXED while primed, which is what makes repeated reads of the
     // same window idempotent.
-    if (!r->primed && (w - r->consumedTo) >= r->gate)
+    const Boolean sealed = atomic_load_explicit(&r->shm->playbackEndFrame,
+                                                memory_order_acquire) != UINT64_MAX;
+    if (!r->primed && ((w - r->consumedTo) >= r->gate || (sealed && w > r->consumedTo)))
     {
         r->offset = (int64_t)r->consumedTo - inNow;
         r->primed = true;
@@ -613,7 +623,7 @@ static UInt32 SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
     {
         const uint64_t availableHere = w - position;
         toRead = (availableHere < (uint64_t)inFrames) ? (uint32_t)availableHere : inFrames;
-        const uint32_t rf = r->shm->ringFrames;
+        const uint32_t rf = SRM_RING_FRAMES;
         uint32_t start = (uint32_t)(position % rf);
         uint32_t first = rf - start;
         if (first > toRead) { first = toRead; }
@@ -633,7 +643,7 @@ static UInt32 SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
         r->primed = false;
         r->gate = r->reprimeFrames;
     }
-    if (position + toRead > r->consumedTo)
+    if (toRead && position + toRead > r->consumedTo)
     {
         r->consumedTo = position + toRead;
         atomic_store_explicit(&r->shm->readIndex, r->consumedTo, memory_order_release);
@@ -642,21 +652,9 @@ static UInt32 SRM_RingRender(SRMRingReader* r, uint64_t w, int64_t inNow,
 }
 
 // ------------------------------------------------------------------------------------------------
-// Demand detection: broadcast when the virtual mic goes in-use / idle so an out-of-process
-// supervisor can run the capture pipeline (BLE wake, decode, shm producer) ONLY while some app
-// actually has IO running on the device.
-//
-// Mechanism: a Darwin notification (libnotify — in libSystem, and one of the few IPC channels
-// coreaudiod's sandbox lets a HAL plug-in use to reach an arbitrary user process). We combine
-// EDGE + STATE deliberately:
-//   - notify_post() fires only on the 0↔≥1 edges of the TOTAL running-client count across both
-//     published devices. Edges are the only events the supervisor acts on (start/stop pipeline),
-//     and Darwin notifications are fire-and-forget with coalescing — posting per-client churn
-//     would add nothing but wakeups.
-//   - notify_set_state() carries the CURRENT total on every change. Notifications are lossy for
-//     anyone not yet registered, so a supervisor that starts late (or restarts) must not have to
-//     wait for the next edge: it does one notify_get_state() and has ground truth immediately.
-//     State is written BEFORE the post so a listener woken by the edge always reads the new count.
+// Diagnostic-only consumer notifications; they never authorize capture. The authenticated
+// App XPC lease is the sole control path. CoreAudio's current consumer count is also published
+// in the protected ring for bounded tail drain. notify_* stays off the real-time ReadInput path.
 //
 // Threading: called only from the control path (Initialize / StartIO / StopIO, under
 // gPlugIn_StateMutex — which also serializes the read-modify-write of the counters against
@@ -698,8 +696,7 @@ static void SRM_ApplyIPCSuffix(void)
 
 static void SRM_PublishConsumerCount(UInt64 inTotalRunning, Boolean inIsEdge)
 {
-    // If registration failed at Initialize the plug-in still works as a plain device —
-    // demand detection degrades to "supervisor runs the pipeline unconditionally".
+    // Losing a diagnostic notification never changes capture authorization or audio behavior.
     if (gSRM_NotifyToken == NOTIFY_TOKEN_INVALID) { return; }
 
     notify_set_state(gSRM_NotifyToken, (uint64_t)inTotalRunning);
@@ -718,6 +715,37 @@ static void SRM_PublishSharedConsumerState(UInt64 inTotalRunning, Boolean inFirs
     {
         atomic_fetch_add_explicit(&gSRM_Remote.shm->startIOEpoch, 1, memory_order_acq_rel);
     }
+}
+
+// StartIO can precede the launch daemon at boot. Retry only on a control queue while an input
+// client is running; the real-time callback never opens/maps memory or performs IPC.
+static void SRM_CancelAttachRetry(void)
+{
+    if (!gSRM_AttachRetry) return;
+    dispatch_source_cancel(gSRM_AttachRetry);
+    dispatch_release(gSRM_AttachRetry);
+    gSRM_AttachRetry = NULL;
+}
+
+static void SRM_StartAttachRetry(void)
+{
+    if (gSRM_Remote.shm || gSRM_AttachRetry) return;
+    gSRM_AttachRetry = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    if (!gSRM_AttachRetry) return;
+    dispatch_source_set_timer(gSRM_AttachRetry, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                               100 * NSEC_PER_MSEC, 10 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(gSRM_AttachRetry, ^{
+        pthread_mutex_lock(&gPlugIn_StateMutex);
+        UInt64 clients = gDevice_IOIsRunning + gDevice2_IOIsRunning;
+        if (clients) {
+            SRM_Attach();
+            if (gSRM_Remote.shm) SRM_PublishSharedConsumerState(clients, true);
+        }
+        if (!clients || gSRM_Remote.shm) SRM_CancelAttachRetry();
+        pthread_mutex_unlock(&gPlugIn_StateMutex);
+    });
+    dispatch_resume(gSRM_AttachRetry);
 }
 
 
@@ -4878,6 +4906,8 @@ static OSStatus	BlackHole_StartIO(AudioServerPlugInDriverRef inDriver, AudioObje
     // Attach the external audio source (our router). Safe to call repeatedly; no-op once mapped.
     SRM_Attach();
 
+    SRM_StartAttachRetry();
+
     // First client of a session: start the timeline mapping fresh (no stale-backlog replay,
     // no mapping inherited from a previous session's timeline). Later clients must NOT reset —
     // the running clients' stream may not glitch.
@@ -4940,6 +4970,7 @@ static OSStatus	BlackHole_StopIO(AudioServerPlugInDriverRef inDriver, AudioObjec
 
     if (!gDevice_IOIsRunning && !gDevice2_IOIsRunning)
     {
+        SRM_CancelAttachRetry();
         SRM_Detach();
     }
 
@@ -5122,16 +5153,23 @@ static OSStatus	BlackHole_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
         Float32* outMain = (Float32*)ioMainBuffer;
         const int64_t now = (int64_t)inIOCycleInfo->mInputTime.mSampleTime;
 
-        if (inIOBufferFrameSize <= kSRM_RenderCacheFrames &&
+        const Boolean remoteUsable = !gMute_Master_Value && SRM_RingValid(&gSRM_Remote);
+        const uint64_t generation = remoteUsable
+            ? atomic_load_explicit(&gSRM_Remote.shm->generation, memory_order_acquire) : 0;
+
+        if (remoteUsable && generation == gSRM_RenderCacheGeneration &&
+            inIOBufferFrameSize <= kSRM_RenderCacheFrames &&
             gSRM_RenderCacheTime == now &&
             gSRM_RenderCacheFrameCount == inIOBufferFrameSize)
         {
             memcpy(outMain, gSRM_RenderCache,
                    (size_t)inIOBufferFrameSize * chans * sizeof(Float32));
+            if (!SRM_RingValid(&gSRM_Remote) ||
+                atomic_load_explicit(&gSRM_Remote.shm->generation, memory_order_acquire) != generation)
+                vDSP_vclr(outMain, 1, inIOBufferFrameSize * chans);
             goto Done;
         }
 
-        const Boolean remoteUsable = !gMute_Master_Value && SRM_RingValid(&gSRM_Remote);
         if (remoteUsable)
         {
             const uint64_t remoteWrite = SRM_RingObserve(&gSRM_Remote, now);
@@ -5141,6 +5179,9 @@ static OSStatus	BlackHole_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
             Float32 lo = -1.0f, hi = 1.0f;
             vDSP_vsmul(outMain, 1, &gain, outMain, 1, inIOBufferFrameSize * chans);
             vDSP_vclip(outMain, 1, &lo, &hi, outMain, 1, inIOBufferFrameSize * chans);
+            if (!SRM_RingValid(&gSRM_Remote) ||
+                atomic_load_explicit(&gSRM_Remote.shm->generation, memory_order_acquire) != generation)
+                vDSP_vclr(outMain, 1, inIOBufferFrameSize * chans);
         }
         else
         {
@@ -5152,6 +5193,7 @@ static OSStatus	BlackHole_DoIOOperation(AudioServerPlugInDriverRef inDriver, Aud
             memcpy(gSRM_RenderCache, outMain,
                    (size_t)inIOBufferFrameSize * chans * sizeof(Float32));
             gSRM_RenderCacheTime = now;
+            gSRM_RenderCacheGeneration = generation;
             gSRM_RenderCacheFrameCount = inIOBufferFrameSize;
         }
         else

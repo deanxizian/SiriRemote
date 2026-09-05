@@ -73,6 +73,7 @@ jobs:
         run: SIRIREMOTE_COMPILE_ONLY=1 ./build.sh
 
   app:
+    # Uses the same DoubaoVoiceSession implementation covered by the Core job.
     name: App (compiles and links)
     runs-on: macos-15
     steps:
@@ -86,3 +87,21 @@ jobs:
       - name: Verify embedded default configuration
         working-directory: app
         run: ./SiriRemote --verify-config
+
+  hal:
+    name: HAL contract, IO and sanitized lifecycle
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build HAL and run isolated audio tests (no installation)
+        working-directory: mic/driver
+        run: SIRIREMOTE_COMPILE_ONLY=1 ./build.sh
+
+  router:
+    name: Voice router and PacketLogger parser
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build router and run parser regressions
+        working-directory: mic/router
+        run: SIRIREMOTE_COMPILE_ONLY=1 ./build.sh

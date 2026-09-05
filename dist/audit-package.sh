@@ -3,10 +3,12 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="$PWD"
-VERSION="${1:-0.1.0}"
-FULL_PKG="$ROOT/dist/out/SiriRemote-$VERSION-Full-Setup.pkg"
-UNINSTALL_PKG="$ROOT/dist/out/SiriRemote-$VERSION-Complete-Uninstall.pkg"
-CHECKSUM_FILE="$ROOT/dist/out/SiriRemote-$VERSION-SHA256SUMS.txt"
+VERSION="${1:-0.2.0}"
+OUTPUT_NAME="${SIRIREMOTE_PACKAGE_OUTPUT_NAME:-out}"
+[[ "$OUTPUT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || exit 2
+FULL_PKG="$ROOT/dist/$OUTPUT_NAME/SiriRemote-$VERSION-Full-Setup.pkg"
+UNINSTALL_PKG="$ROOT/dist/$OUTPUT_NAME/SiriRemote-$VERSION-Complete-Uninstall.pkg"
+CHECKSUM_FILE="$ROOT/dist/$OUTPUT_NAME/SiriRemote-$VERSION-SHA256SUMS.txt"
 EXPECTED_TEAM="96M7FW2XLU"
 EXPECTED_AUTHORITY="Developer ID Application: ZIAN XI (96M7FW2XLU)"
 EXPECTED_INSTALLER_AUTHORITY="Developer ID Installer: ZIAN XI (96M7FW2XLU)"
@@ -183,6 +185,8 @@ esac
     = com.deanxi.siriremote.capture ]
 [ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$LAUNCHD")" \
     = "/Library/Application Support/SiriRemote/SiriRemoteCapture" ]
+[ "$(/usr/bin/plutil -extract MachServices raw -o - "$LAUNCHD")" = com.deanxi.siriremote.capture ]
+[ "$(/usr/libexec/PlistBuddy -c 'Print :MachServices:com.deanxi.siriremote.capture' "$LAUNCHD")" = true ]
 
 if /usr/bin/find "$PAYLOAD" \
     \( -iname '*PacketLogger*' -o -iname '*HyperVibe*' -o -iname '*SiriRemoteForge*' \

@@ -28,6 +28,8 @@ mic/test_decoder
 dist/build/
 dist/out/
 dist/local/
+dist/review-build/
+dist/release-*/
 
 # Codex workspace metadata
 .codex/

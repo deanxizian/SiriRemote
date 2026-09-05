@@ -39,6 +39,7 @@ SWIFT_FILES=(
     "../SiriRemoteCore/Sources/SiriRemoteCore/ServiceHealth.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/RemoteAggregation.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/RemoteVoiceSession.swift"
+    "../SiriRemoteCore/Sources/SiriRemoteCore/DoubaoVoiceSession.swift"
     "../SiriRemoteCore/Sources/SiriRemoteCore/CircularScroll.swift"
 )
 
@@ -77,6 +78,7 @@ swiftc \
     -framework Carbon \
     -framework AppKit \
     -framework ServiceManagement \
+    -framework Security \
     -framework SwiftUI \
     -framework MultitouchSupport
 

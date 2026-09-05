@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/deanxizian/SiriRemote/actions/workflows/ci.yml/badge.svg)](https://github.com/deanxizian/SiriRemote/actions/workflows/ci.yml)
 
+[下载最新版本](https://github.com/deanxizian/SiriRemote/releases/latest) · [更新记录](CHANGELOG.md)
+
 SiriRemote 是一款面向 **Apple TV Siri Remote 第三代（A2854）** 的 macOS 菜单栏应用，
 提供 Mac 触控、固定按键控制，以及遥控器实体麦克风到豆包输入法的语音输入。
 
@@ -25,6 +27,7 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 | 项目 | 要求 |
 | --- | --- |
 | macOS | macOS 13 Ventura 或更高版本 |
+| Mac 芯片 | Apple Silicon（发布包为 arm64，暂不提供 Intel 预编译包） |
 | 遥控器 | Apple TV Siri Remote 第三代 A2854（USB-C） |
 | 蓝牙 | 遥控器已在 macOS 蓝牙设置中配对并连接 |
 | 权限 | SiriRemote 的“辅助功能”权限 |
@@ -59,15 +62,15 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 三个文件：
 
 ```text
-SiriRemote-0.1.0-Full-Setup.pkg
-SiriRemote-0.1.0-Complete-Uninstall.pkg
-SiriRemote-0.1.0-SHA256SUMS.txt
+SiriRemote-0.2.0-Full-Setup.pkg
+SiriRemote-0.2.0-Complete-Uninstall.pkg
+SiriRemote-0.2.0-SHA256SUMS.txt
 ```
 
 先在下载目录核对校验和：
 
 ```sh
-shasum -a 256 -c SiriRemote-0.1.0-SHA256SUMS.txt
+shasum -a 256 -c SiriRemote-0.2.0-SHA256SUMS.txt
 ```
 
 两个 PKG 均显示 `OK` 后再安装 Full Setup。PKG 使用
@@ -75,6 +78,9 @@ shasum -a 256 -c SiriRemote-0.1.0-SHA256SUMS.txt
 和 HAL 驱动使用同一团队的 `Developer ID Application` 身份签名。当前发行包尚未完成 Apple
 公证；若 macOS 阻止打开，请在尝试打开后进入“系统设置 → 隐私与安全”，在“安全性”中
 选择“仍要打开”并完成管理员验证。不要关闭 Gatekeeper，也不要清除文件隔离属性。
+
+从 0.1.0 升级请直接安装完整包，无需先卸载。0.2.0 更新了 App、Capture、路由器和音频驱动
+之间的协议，不能只替换 App；现有配置保留，安装期间系统音频会短暂重启。
 
 安装包会安装以下本项目组件：
 
@@ -158,8 +164,9 @@ A2854 实体麦克风
 PacketLogger 只记录蓝牙 HCI 数据；SiriRemote 重组 ACL/L2CAP/ATT Notification、校验并
 解码 Opus，再将单声道 PCM 复制为双声道交给虚拟麦克风。
 
-应用切换到已启用的豆包输入法后发送配对的 Fn down/up；松开 Siri 键后继续接收约 80 ms
-迟到帧，并最多等待 750 ms 排空音频。
+应用切换到已启用的豆包输入法后发送配对的 Fn down/up；松开后等待最后一帧后的 80 ms
+安静窗口（收尾上限 300 ms），再最多等待 750 ms 排空音频。收尾时再次按住 Siri 会保留
+这次按下，上一句结束后接续新会话；新旧音频按 generation 隔离。
 
 ### 后台组件
 
@@ -182,6 +189,8 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 - 断连、睡眠、PacketLogger 或路由器异常、权限丢失和应用退出都会使当前语音 generation
   失效，并关闭采集 demand。
 - Capture 服务只执行固定的 SiriRemote 工作流，不接受调用方提供任意命令、UID 或路径。
+- App 与 Capture 通过校验签名、产品标识和 Team ID 的 XPC 通信，不信任通知中的 PID。
+  PCM 仅供 root 和 CoreAudio 服务组访问，App 只读取诊断计数；停止时先撤销音频会话再回收进程。
 - Capture 服务不以 root 直接运行 `/Applications/PacketLogger.app`；它使用 root 所有的工作
   副本，并在采集前验证 Apple 签名、Bundle ID、文件所有权和写权限。
 - 语音采集的临时文件位于 `/private/var/run/com.deanxi.siriremote/`，会在会话结束后清理。
@@ -216,7 +225,10 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 ```sh
 log stream --level debug --predicate 'subsystem == "com.deanxi.siriremote"'
 sudo tail -f /Library/Logs/SiriRemote/capture.log
+/Applications/SiriRemote.app/Contents/MacOS/SiriRemote --verify-capture
 ```
+
+`--verify-capture` 只检查真实 App 与 Capture 的双向签名握手，不启动录音或发送按键。
 
 查看语音相关进程：
 
@@ -231,7 +243,7 @@ pgrep -fl 'SiriRemote|packetlogger|SiriRemoteAudioRouter|SiriRemoteCapture'
 双击：
 
 ```text
-dist/out/SiriRemote-0.1.0-Complete-Uninstall.pkg
+SiriRemote-0.2.0-Complete-Uninstall.pkg
 ```
 
 卸载包会删除 SiriRemote App、HAL 驱动、Capture 服务、LaunchDaemon、当前控制台用户的
@@ -246,16 +258,16 @@ dist/out/SiriRemote-0.1.0-Complete-Uninstall.pkg
 ### 完整本地安装包
 
 ```sh
-dist/build-release.sh 0.1.0
+dist/build-release.sh 0.2.0
 ```
 
 该命令会依次运行 Core 测试、构建 App、路由器、HAL 和 Capture 服务，完成签名、打包与
 内容审计。输出位于 `dist/out/`：
 
 ```text
-SiriRemote-0.1.0-Full-Setup.pkg
-SiriRemote-0.1.0-Complete-Uninstall.pkg
-SiriRemote-0.1.0-SHA256SUMS.txt
+SiriRemote-0.2.0-Full-Setup.pkg
+SiriRemote-0.2.0-Complete-Uninstall.pkg
+SiriRemote-0.2.0-SHA256SUMS.txt
 ```
 
 ### 本机开发验证
@@ -269,6 +281,10 @@ SiriRemote-0.1.0-SHA256SUMS.txt
 
 实时测试只使用 `/Applications/SiriRemote.app`，不要直接运行 `app/SiriRemote.app` 或其他
 项目内 bundle，以免 TCC 权限、进程状态和实际测试版本不一致。
+
+该开发入口只更新 App。修改 Capture、Router、HAL 或共享 ABI 时，必须构建并安装完整包。
+CI 同时覆盖实际豆包会话状态机、Capture 身份校验、Router/解析器、HAL 多客户端 I/O，
+以及 ASan/UBSan 下的冷启动挂接、失效会话静音和尾音排空；不代替遥控器和豆包实机验收。
 
 仅运行 Core 单元测试：
 

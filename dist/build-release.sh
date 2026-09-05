@@ -3,8 +3,8 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="$PWD"
-VERSION="${1:-0.1.0}"
-BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-1}"
+VERSION="${1:-0.2.0}"
+BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-3}"
 APP_STAGE="$ROOT/dist/build/staging/SiriRemote.app"
 RELEASE_SIGN_IDENTITY="Developer ID Application: ZIAN XI (96M7FW2XLU)"
 INSTALLER_SIGN_IDENTITY="Developer ID Installer: ZIAN XI (96M7FW2XLU)"

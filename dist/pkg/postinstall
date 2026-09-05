@@ -282,6 +282,11 @@ verify_expected_signature "$CAPTURE" SiriRemoteCapture
 verify_expected_signature "$ROUTER" SiriRemoteAudioRouter
 verify_expected_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog
 verify_expected_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier
+verify_launchdaemon
+# New activation requires authenticated IPC. Rollback may restore the previous version,
+# which legitimately had no MachServices key, so this check is separate from rollback validation.
+[ "$(/usr/bin/plutil -extract MachServices raw -o - "$PLIST")" = com.deanxi.siriremote.capture ]
+[ "$(/usr/libexec/PlistBuddy -c 'Print :MachServices:com.deanxi.siriremote.capture' "$PLIST")" = true ]
 
 restart_coreaudio
 /usr/bin/perl -e 'select(undef, undef, undef, 2)'

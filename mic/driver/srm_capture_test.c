@@ -167,9 +167,9 @@ static void inspect_shared_source(void)
         }
     }
     const double rms = sqrt(sumSquares / (sampleFrames * SRM_CHANNELS));
-    printf("srm_capture_test: source write=%llu active=%u rms=%.6f peak=%.6f\n",
+    printf("srm_capture_test: source write=%llu active=%llu rms=%.6f peak=%.6f\n",
            (unsigned long long)writeIndex,
-           atomic_load_explicit(&shared->producerActive, memory_order_acquire), rms, peak);
+           (unsigned long long)atomic_load_explicit(&shared->producerActive, memory_order_acquire), rms, peak);
     munmap(shared, sizeof(*shared));
 }
 

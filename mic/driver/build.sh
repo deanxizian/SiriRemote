@@ -10,8 +10,8 @@ DRIVER="SiriRemoteAudio.driver"
 EXE="SiriRemoteAudio"
 CAPTURE_APP="SiriRemoteMicCaptureTest.app"
 MACOS_MIN="${SIRIREMOTE_MACOS_MIN:-13.0}"
-DRIVER_VERSION="${SIRIREMOTE_VERSION:-0.1.0}"
-BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-1}"
+DRIVER_VERSION="${SIRIREMOTE_VERSION:-0.2.0}"
+BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-3}"
 DRIVER_SIGN_IDENTITY="${SIRIREMOTE_SIGN_IDENTITY:-Developer ID Application: ZIAN XI (96M7FW2XLU)}"
 # Optional stable signing identity for the capture-test app (keeps its microphone TCC grant across
 # rebuilds). Set SRM_CAPTURE_SIGN_IDENTITY to your own "Apple Development: …" identity; unset → ad-hoc.
@@ -50,7 +50,6 @@ clang -bundle -O2 \
     -framework CoreFoundation -framework CoreAudio -framework Accelerate \
     -o "$DRIVER/Contents/MacOS/$EXE"
 
-clang -O2 -Wall -Wextra -Werror srm_test_writer.c -o srm_test_writer
 clang -O2 -Wall -Wextra -Werror srm_capture_test.c \
     -framework CoreFoundation -framework CoreAudio \
     -o "$CAPTURE_APP/Contents/MacOS/SiriRemoteMicCaptureTest"
@@ -77,6 +76,7 @@ case "$CODE_SIGN_TIMESTAMP" in
         exit 2
         ;;
 esac
+if [ "${SIRIREMOTE_COMPILE_ONLY:-0}" != "1" ]; then
 security find-identity -v -p codesigning | grep -Fq "\"$DRIVER_SIGN_IDENTITY\"" || {
     echo "required signing identity is unavailable: $DRIVER_SIGN_IDENTITY" >&2
     exit 1
@@ -90,11 +90,25 @@ else
     codesign --force --sign - "$CAPTURE_APP"
     echo "! capture test ad-hoc signed (set SRM_CAPTURE_SIGN_IDENTITY for stable TCC identity)"
 fi
+fi
 
 echo "✓ built $DRIVER"
-codesign -dv "$DRIVER" 2>&1 | grep -E 'Identifier|Signature' || true
+if [ "${SIRIREMOTE_COMPILE_ONLY:-0}" != "1" ]; then
+    codesign --verify --strict "$DRIVER"
+fi
 "./srm_driver_contract_test" "$DRIVER/Contents/MacOS/$EXE"
 # coreaudiod-style IO simulation: proves stereo ReadInput continuity, idempotency under a second
 # client, resync recovery, clean silence with no A2854 producer, and no unrelated-source leakage.
 "./srm_io_sim" "$DRIVER/Contents/MacOS/$EXE"
+# Instrument both sides: these regressions never contact coreaudiod or production IPC.
+LIFECYCLE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/siriremote-hal-test.XXXXXX")"
+trap '/bin/rm -rf "$LIFECYCLE_DIR"' EXIT
+clang -bundle -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -include SiriRemoteMic.config.h SiriRemoteMic.c \
+    -framework CoreFoundation -framework CoreAudio -framework Accelerate \
+    -o "$LIFECYCLE_DIR/SiriRemoteAudio"
+clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    srm_lifecycle_test.c -framework CoreFoundation -framework CoreAudio \
+    -o "$LIFECYCLE_DIR/srm_lifecycle_test"
+"$LIFECYCLE_DIR/srm_lifecycle_test" "$LIFECYCLE_DIR/SiriRemoteAudio"
 echo "system installation is owned by the verified packages in ../../dist"
