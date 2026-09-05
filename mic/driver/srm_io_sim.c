@@ -51,8 +51,6 @@ enum {
     kCycleFrames = 512,          // coreaudiod-typical IO quantum
     kChunkFrames = 480,          // producers write 10 ms chunks, like the real cadence
     kTrianglePeriod = 960,       // frames; slope = 2*span/period per frame
-    kExpectedPreRollFrames = 24000, // mirror the driver's 500 ms input-source settle reserve
-    kExpectedPrimeFrames = 4800,    // mirror the driver's 100 ms jitter gate
 };
 #define kIgnoredBuiltinName "/SiriRemoteIgnored"
 #define kNoCycle 0x7fffffffu
@@ -346,6 +344,7 @@ typedef struct {
     unsigned    firstIdemMismatchFrame;
     Float32     firstIdemValueA, firstIdemValueB;
     double      wrapRate;
+    size_t      releaseDrainFrame;
 } PhaseRun;
 
 static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
@@ -358,6 +357,7 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
     run->firstIdemMismatchCycle = kNoCycle;
     run->firstIdemMismatchFrame = 0;
     run->wrapRate = 0;
+    run->releaseDrainFrame = 0;
 
     const uint64_t epochBefore = atomic_load_explicit(
         &gRemoteProducer.shm->startIOEpoch, memory_order_acquire);
@@ -418,7 +418,18 @@ static int run_phase(AudioServerPlugInDriverRef driver, PhaseRun *run)
             atomic_store_explicit(&gRemoteProducer.writing, 1, memory_order_release);
         }
         if (k == run->remoteStopCycle)
-        { atomic_store_explicit(&gRemoteProducer.writing, 0, memory_order_release); }
+        {
+            atomic_store_explicit(&gRemoteProducer.writing, 0, memory_order_release);
+            const uint64_t written = atomic_load_explicit(&gRemoteProducer.shm->writeIndex,
+                                                          memory_order_acquire);
+            const uint64_t consumed = atomic_load_explicit(&gRemoteProducer.shm->readIndex,
+                                                           memory_order_acquire);
+            // Count the actual queue at release, plus at most one already-started chunk.
+            // A timed priming wait can overshoot on a shared host; assuming it published
+            // exactly 100 ms incorrectly classifies that valid extra tail as audio leakage.
+            run->releaseDrainFrame = (size_t)k * kCycleFrames +
+                (size_t)(written > consumed ? written - consumed : 0) + kChunkFrames;
+        }
         if (k == run->remoteResumeCycle)
         {
             resumeWriteIndex = atomic_load_explicit(&gRemoteProducer.shm->writeIndex,
@@ -636,13 +647,9 @@ int main(int argc, char **argv)
                phase2.idemMismatches, phase2.comparedWindows);
         check_sign_window("phase2", "remote before release", phase2.stream,
                           12000, 22500, 1, 0.95);
-        // A new StartIO session preserves at most 500 ms of pre-roll, and this fixture adds
-        // 100 ms of priming before its clock starts. After release, those queued remote frames
-        // must drain before the device becomes silent. Allow one producer chunk for a write
-        // already in flight, then require exact silence until reactivation.
-        const size_t releaseFrame = (size_t)phase2.remoteStopCycle * kCycleFrames;
-        const size_t drainDeadline = releaseFrame + kExpectedPreRollFrames
-            + kExpectedPrimeFrames + kChunkFrames;
+        // Require exact silence after the actual queued tail (and one in-flight chunk)
+        // drains. This deadline is captured before reading any of the release-gap output.
+        const size_t drainDeadline = phase2.releaseDrainFrame;
         CHECK(drainDeadline < resumeFrame,
               "phase2: invalid drain window [%zu,%zu)", drainDeadline, resumeFrame);
         check_all_silent("phase2", "single-source gap is silent after bounded drain",
@@ -690,8 +697,7 @@ int main(int argc, char **argv)
         CHECK(ignoredAt == SIZE_MAX,
               "(b) ignored source leaked into device at frame %zu", ignoredAt);
         const size_t resumeFrame = (size_t)phase3.remoteResumeCycle * kCycleFrames;
-        const size_t drainDeadline = releaseFrame + kExpectedPreRollFrames
-            + kExpectedPrimeFrames + kChunkFrames;
+        const size_t drainDeadline = phase3.releaseDrainFrame;
         CHECK(drainDeadline < resumeFrame - kCycleFrames,
               "phase3: invalid drain window [%zu,%zu)",
               drainDeadline, resumeFrame - kCycleFrames);
