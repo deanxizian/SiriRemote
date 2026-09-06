@@ -7,6 +7,9 @@ import Foundation
 /// down/up pair. The A2854 stops producing microphone frames when its physical Siri button is
 /// released, so this state machine deliberately has no software-latched recording mode.
 public struct SiriButtonGestureMachine: Sendable {
+    /// Shared by short-tap classification and production voice activation.
+    public static let holdThreshold: TimeInterval = 0.3
+
     public enum Command: Equatable, Sendable {
         case beginVoice
         case endVoice
@@ -32,7 +35,8 @@ public struct SiriButtonGestureMachine: Sendable {
         guard let startedAt = pressedAt else { return [] }
         pressedAt = nil
         let duration = max(0, time - startedAt)
-        return duration < holdThreshold ? [.endVoice, .sendReturn] : [.endVoice]
+        // Use the same floating-point boundary tolerance as voice activation.
+        return duration + 1e-9 < holdThreshold ? [.endVoice, .sendReturn] : [.endVoice]
     }
 
     /// Voice capture may be pre-warmed on down, but Fn may only be held after the same physical

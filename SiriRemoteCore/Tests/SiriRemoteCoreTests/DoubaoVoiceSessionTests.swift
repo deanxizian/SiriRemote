@@ -11,21 +11,35 @@ final class DoubaoVoiceSessionTests: XCTestCase {
     private func active() -> DoubaoVoiceSession {
         var voice = DoubaoVoiceSession()
         XCTAssertEqual(voice.press(at: 0), [.beginCapture(1)])
-        XCTAssertEqual(voice.poll(audio(), at: 0.2), [.selectInputSource(1)])
-        XCTAssertEqual(voice.inputSourceSelected(session: 1, at: 0.2,
+        XCTAssertEqual(voice.poll(audio(), at: 0.3), [.selectInputSource(1)])
+        XCTAssertEqual(voice.inputSourceSelected(session: 1, at: 0.3,
                                                 success: true, settleDelay: 0), [])
-        XCTAssertEqual(voice.poll(audio(), at: 0.22), [.pressFn(1)])
-        XCTAssertEqual(voice.fnResult(session: 1, at: 0.22, success: true), [])
+        XCTAssertEqual(voice.poll(audio(), at: 0.32), [.pressFn(1)])
+        XCTAssertEqual(voice.fnResult(session: 1, at: 0.32, success: true), [])
         XCTAssertEqual(voice.phase, .active)
         return voice
     }
 
     func testShortPressCancelsWithoutFnOrInputSourceSwitch() {
+        for duration in [0.1, 0.2, 0.25, 0.299] {
+            var voice = DoubaoVoiceSession()
+            _ = voice.press(at: 0)
+            XCTAssertEqual(voice.poll(audio(), at: duration), [])
+            XCTAssertEqual(voice.release(at: duration), [.endCapture(1)])
+            XCTAssertEqual(voice.phase, .idle)
+        }
+    }
+
+    func testExact300MillisecondBoundaryStartsVoiceNotTap() {
         var voice = DoubaoVoiceSession()
-        _ = voice.press(at: 0)
-        XCTAssertEqual(voice.poll(audio(), at: 0.19), [])
-        XCTAssertEqual(voice.release(at: 0.19), [.endCapture(1)])
-        XCTAssertEqual(voice.phase, .idle)
+        _ = voice.press(at: 5)
+        XCTAssertEqual(voice.poll(audio(), at: 5.299), [])
+        XCTAssertEqual(voice.poll(audio(), at: 5.3), [.selectInputSource(1)])
+        _ = voice.inputSourceSelected(session: 1, at: 5.3, success: true, settleDelay: 0)
+        XCTAssertEqual(voice.release(at: 5.3), [])
+        XCTAssertEqual(voice.poll(audio(), at: 5.32), [.pressFn(1)])
+        _ = voice.fnResult(session: 1, at: 5.32, success: true)
+        XCTAssertEqual(voice.phase, .draining)
     }
 
     func testPreparationTimeoutAndLateInputSourceCallback() {
@@ -41,15 +55,15 @@ final class DoubaoVoiceSessionTests: XCTestCase {
     func testSwitchOnlyOnceAndReleaseWhileSwitchSettles() {
         var voice = DoubaoVoiceSession()
         _ = voice.press(at: 0)
-        _ = voice.poll(audio(), at: 0.2)
-        _ = voice.inputSourceSelected(session: 1, at: 0.2, success: true, settleDelay: 0.25)
-        XCTAssertEqual(voice.poll(audio(10000), at: 0.3), [])
-        _ = voice.release(at: 0.31)
-        XCTAssertEqual(voice.poll(audio(10500), at: 0.44), [])
-        XCTAssertEqual(voice.poll(audio(10500), at: 0.46), [.pressFn(1)])
-        _ = voice.fnResult(session: 1, at: 0.46, success: true)
+        _ = voice.poll(audio(), at: 0.3)
+        _ = voice.inputSourceSelected(session: 1, at: 0.3, success: true, settleDelay: 0.25)
+        XCTAssertEqual(voice.poll(audio(10000), at: 0.4), [])
+        _ = voice.release(at: 0.41)
+        XCTAssertEqual(voice.poll(audio(10500), at: 0.54), [])
+        XCTAssertEqual(voice.poll(audio(10500), at: 0.56), [.pressFn(1)])
+        _ = voice.fnResult(session: 1, at: 0.56, success: true)
         XCTAssertEqual(voice.phase, .draining)
-        XCTAssertEqual(voice.poll(audio(10500, read: 10500), at: 0.55),
+        XCTAssertEqual(voice.poll(audio(10500, read: 10500), at: 0.65),
                        [.seal(1, 10500), .releaseFn, .endCapture(1)])
     }
 
@@ -82,7 +96,18 @@ final class DoubaoVoiceSessionTests: XCTestCase {
         XCTAssertEqual(voice.poll(audio(12000, read: 11000), at: 1.06),
                        [.releaseFn, .endCapture(1), .beginCapture(2)])
         XCTAssertEqual(voice.phase, .priming)
-        XCTAssertEqual(voice.poll(audio(9600, generation: 12), at: 1.3), [.selectInputSource(2)])
+        XCTAssertEqual(voice.poll(audio(9600, generation: 12), at: 1.339), [])
+        XCTAssertEqual(voice.poll(audio(9600, generation: 12), at: 1.34), [.selectInputSource(2)])
+    }
+
+    func testPendingShortPressStillCancelsAfterOldDrainFinishes() {
+        var voice = active()
+        _ = voice.release(at: 1)
+        _ = voice.press(at: 1.04)
+        _ = voice.poll(audio(read: 9600), at: 1.06)
+        XCTAssertEqual(voice.poll(audio(generation: 12), at: 1.3), [])
+        XCTAssertEqual(voice.release(at: 1.31), [.endCapture(2)])
+        XCTAssertEqual(voice.phase, .idle)
     }
 
     func testReleasedPendingPressIsNotStartedLater() {
@@ -115,13 +140,13 @@ final class DoubaoVoiceSessionTests: XCTestCase {
 
     func testPermissionOrHelperFailureDoesNotLeaveFnHeld() {
         var voice = active()
-        XCTAssertEqual(voice.poll(.init(), at: 0.3),
+        XCTAssertEqual(voice.poll(.init(), at: 0.4),
                        [.releaseFn, .endCapture(1), .failure("遥控器音频会话已中断")])
     }
 
     func testDuplicateEdgesDoNotCreateExtraLeaseOrFn() {
         var voice = active()
-        XCTAssertEqual(voice.press(at: 0.3), [])
+        XCTAssertEqual(voice.press(at: 0.35), [])
         XCTAssertEqual(voice.release(at: 0.4), [])
         XCTAssertEqual(voice.release(at: 0.41), [])
         XCTAssertEqual(voice.phase, .draining)
@@ -136,25 +161,25 @@ final class DoubaoVoiceSessionTests: XCTestCase {
     func testInputSourceFailureEndsCaptureWithoutFn() {
         var voice = DoubaoVoiceSession()
         _ = voice.press(at: 0)
-        _ = voice.poll(audio(), at: 0.2)
-        XCTAssertEqual(voice.inputSourceSelected(session: 1, at: 0.2, success: false, settleDelay: 0),
+        _ = voice.poll(audio(), at: 0.3)
+        XCTAssertEqual(voice.inputSourceSelected(session: 1, at: 0.3, success: false, settleDelay: 0),
                        [.endCapture(1), .failure("无法切换到豆包输入法")])
     }
 
     func testFnFailureEndsCaptureAndIsNotRetried() {
         var voice = DoubaoVoiceSession()
         _ = voice.press(at: 0)
-        _ = voice.poll(audio(), at: 0.2)
-        _ = voice.inputSourceSelected(session: 1, at: 0.2, success: true, settleDelay: 0)
-        _ = voice.poll(audio(), at: 0.22)
-        XCTAssertEqual(voice.fnResult(session: 1, at: 0.22, success: false),
+        _ = voice.poll(audio(), at: 0.3)
+        _ = voice.inputSourceSelected(session: 1, at: 0.3, success: true, settleDelay: 0)
+        _ = voice.poll(audio(), at: 0.32)
+        XCTAssertEqual(voice.fnResult(session: 1, at: 0.32, success: false),
                        [.endCapture(1), .failure("Fn 发送失败，请检查辅助功能权限")])
-        XCTAssertEqual(voice.poll(audio(), at: 0.3), [])
+        XCTAssertEqual(voice.poll(audio(), at: 0.4), [])
     }
 
     func testFrozenProducerReleasesFnAtDeadline() {
         var voice = active()
-        XCTAssertEqual(voice.poll(audio(), at: 0.53),
+        XCTAssertEqual(voice.poll(audio(), at: 0.63),
                        [.releaseFn, .endCapture(1), .failure("遥控器音频采集已中断")])
     }
 }

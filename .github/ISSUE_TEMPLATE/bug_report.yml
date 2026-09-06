@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: SiriRemote version
-      placeholder: 0.2.0 (build number if known)
+      placeholder: 0.2.1 (build number if known)
     validations:
       required: true
   - type: input

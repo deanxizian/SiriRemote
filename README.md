@@ -62,15 +62,15 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 三个文件：
 
 ```text
-SiriRemote-0.2.0-Full-Setup.pkg
-SiriRemote-0.2.0-Complete-Uninstall.pkg
-SiriRemote-0.2.0-SHA256SUMS.txt
+SiriRemote-0.2.1-Full-Setup.pkg
+SiriRemote-0.2.1-Complete-Uninstall.pkg
+SiriRemote-0.2.1-SHA256SUMS.txt
 ```
 
 先在下载目录核对校验和：
 
 ```sh
-shasum -a 256 -c SiriRemote-0.2.0-SHA256SUMS.txt
+shasum -a 256 -c SiriRemote-0.2.1-SHA256SUMS.txt
 ```
 
 两个 PKG 均显示 `OK` 后再安装 Full Setup。PKG 使用
@@ -79,8 +79,8 @@ shasum -a 256 -c SiriRemote-0.2.0-SHA256SUMS.txt
 公证；若 macOS 阻止打开，请在尝试打开后进入“系统设置 → 隐私与安全”，在“安全性”中
 选择“仍要打开”并完成管理员验证。不要关闭 Gatekeeper，也不要清除文件隔离属性。
 
-从 0.1.0 升级请直接安装完整包，无需先卸载。0.2.0 更新了 App、Capture、路由器和音频驱动
-之间的协议，不能只替换 App；现有配置保留，安装期间系统音频会短暂重启。
+升级请直接安装完整包，无需先卸载，现有配置保留。0.2.0 起更新了 App、Capture、路由器
+和音频驱动之间的协议，从 0.1.0 升级不能只替换 App；安装期间系统音频会短暂重启。
 
 安装包会安装以下本项目组件：
 
@@ -131,9 +131,9 @@ SiriRemote 不会修改 macOS 默认输入设备。开始语音时，如果当�
 | 手势 | 行为 |
 | --- | --- |
 | 短按后松开 | 立即发送 Return |
-| 按住至少 200 ms | 开始按住说话；松开后结束录音 |
+| 按住至少 300 ms | 开始按住说话；松开后结束录音 |
 
-按下时会预热采集；达到 200 ms 才发送 Fn down，短按不会打开语音。1.5 秒内未准备好时
+按下时会预热采集；按住达到 300 ms 且输入法与音频就绪后才发送 Fn down，短按不会打开语音。1.5 秒内未准备好时
 会安全中止并释放 Fn。
 
 ## 设置窗口
@@ -213,7 +213,7 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 1. 当前有可接收文字的输入框焦点。
 2. 豆包输入法已在系统输入法列表中启用。
 3. `PacketLogger.app` 位于 `/Applications`。
-4. 按住 Siri 键超过 200 ms。
+4. 按住 Siri 键至少 300 ms。
 
 ### 豆包界面出现，但没有波形或无法识别
 
@@ -243,7 +243,7 @@ pgrep -fl 'SiriRemote|packetlogger|SiriRemoteAudioRouter|SiriRemoteCapture'
 双击：
 
 ```text
-SiriRemote-0.2.0-Complete-Uninstall.pkg
+SiriRemote-0.2.1-Complete-Uninstall.pkg
 ```
 
 卸载包会删除 SiriRemote App、HAL 驱动、Capture 服务、LaunchDaemon、当前控制台用户的
@@ -258,16 +258,16 @@ SiriRemote-0.2.0-Complete-Uninstall.pkg
 ### 完整本地安装包
 
 ```sh
-dist/build-release.sh 0.2.0
+dist/build-release.sh 0.2.1
 ```
 
 该命令会依次运行 Core 测试、构建 App、路由器、HAL 和 Capture 服务，完成签名、打包与
 内容审计。输出位于 `dist/out/`：
 
 ```text
-SiriRemote-0.2.0-Full-Setup.pkg
-SiriRemote-0.2.0-Complete-Uninstall.pkg
-SiriRemote-0.2.0-SHA256SUMS.txt
+SiriRemote-0.2.1-Full-Setup.pkg
+SiriRemote-0.2.1-Complete-Uninstall.pkg
+SiriRemote-0.2.1-SHA256SUMS.txt
 ```
 
 ### 本机开发验证
