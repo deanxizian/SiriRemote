@@ -15,7 +15,7 @@ final class DoubaoVoiceCoordinator {
     func handleSiri(pressed: Bool) {
         let now = CACurrentMediaTime()
         let commands = pressed ? gesture.press(at: now)
-            : gesture.release(at: now, holdThreshold: 0.2)
+            : gesture.release(at: now, holdThreshold: SiriButtonGestureMachine.holdThreshold)
         for command in commands {
             switch command {
             case .beginVoice: apply(voice.press(at: now))

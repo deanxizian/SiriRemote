@@ -75,7 +75,9 @@ public struct DoubaoVoiceSession {
         if pendingPressAt != nil { pendingPressAt = nil; return [] }
         guard let started = pressedAt else { return [] }
         pressedAt = nil
-        if now - started + 1e-9 < 0.2 { return abort(reason: nil) }
+        if now - started + 1e-9 < SiriButtonGestureMachine.holdThreshold {
+            return abort(reason: nil)
+        }
         releasedAt = now
         if phase == .active { phase = .draining }
         else if phase == .priming && !selectionRequested { return abort(reason: nil) }
@@ -120,7 +122,8 @@ public struct DoubaoVoiceSession {
                 fnRequested = true
                 return [.pressFn(session)]
             }
-            if !selectionRequested, let pressedAt, now - pressedAt + 1e-9 >= 0.2,
+            if !selectionRequested, let pressedAt,
+               now - pressedAt + 1e-9 >= SiriButtonGestureMachine.holdThreshold,
                audio.available, audio.active, audio.write > 0 {
                 audioGeneration = audio.generation
                 selectionRequested = true

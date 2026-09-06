@@ -3,7 +3,7 @@ import XCTest
 
 
 final class SiriButtonGestureTests: XCTestCase {
-    private let holdThreshold: TimeInterval = 0.2
+    private let holdThreshold = SiriButtonGestureMachine.holdThreshold
 
     func testQuickTapEndsPrewarmAndSendsReturnImmediately() {
         var gesture = SiriButtonGestureMachine()
@@ -16,15 +16,26 @@ final class SiriButtonGestureTests: XCTestCase {
     }
 
     func testHoldRetainsNormalPushToTalkPair() {
+        XCTAssertEqual(holdThreshold, 0.3)
         var gesture = SiriButtonGestureMachine()
         XCTAssertEqual(gesture.press(at: 5.0), [.beginVoice])
-        XCTAssertFalse(gesture.canActivateVoice(at: 5.199, holdThreshold: holdThreshold))
-        XCTAssertTrue(gesture.canActivateVoice(at: 5.2, holdThreshold: holdThreshold))
+        XCTAssertFalse(gesture.canActivateVoice(at: 5.299, holdThreshold: holdThreshold))
+        XCTAssertTrue(gesture.canActivateVoice(at: 5.3, holdThreshold: holdThreshold))
         XCTAssertEqual(
-            gesture.release(at: 5.2, holdThreshold: holdThreshold),
+            gesture.release(at: 5.3, holdThreshold: holdThreshold),
             [.endVoice]
         )
         XCTAssertFalse(gesture.isPhysicallyPressed)
+    }
+
+    func testPressesBetweenOldAndNewThresholdSendReturnOnRelease() {
+        for duration in [0.2, 0.25, 0.299] {
+            var gesture = SiriButtonGestureMachine()
+            XCTAssertEqual(gesture.press(at: 5), [.beginVoice])
+            XCTAssertFalse(gesture.canActivateVoice(at: 5 + duration, holdThreshold: holdThreshold))
+            XCTAssertEqual(gesture.release(at: 5 + duration, holdThreshold: holdThreshold),
+                           [.endVoice, .sendReturn])
+        }
     }
 
     func testDuplicatePressIsIgnored() {

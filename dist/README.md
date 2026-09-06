@@ -3,7 +3,7 @@
 Build and verify every component, then create both packages:
 
 ```sh
-dist/build-release.sh 0.2.0
+dist/build-release.sh 0.2.1
 ```
 
 Artifacts are written to `dist/out/`:
@@ -15,7 +15,7 @@ Artifacts are written to `dist/out/`:
 To repeat the package-content and signature audit without rebuilding, pass the same version:
 
 ```sh
-dist/audit-package.sh 0.2.0
+dist/audit-package.sh 0.2.1
 ```
 
 The setup package installs only:

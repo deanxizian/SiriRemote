@@ -3,7 +3,7 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="$PWD"
-VERSION="${1:-0.2.0}"
+VERSION="${1:-0.2.1}"
 OUTPUT_NAME="${SIRIREMOTE_PACKAGE_OUTPUT_NAME:-out}"
 [[ "$OUTPUT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || exit 2
 FULL_PKG="$ROOT/dist/$OUTPUT_NAME/SiriRemote-$VERSION-Full-Setup.pkg"
