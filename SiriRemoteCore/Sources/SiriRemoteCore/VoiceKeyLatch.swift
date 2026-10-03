@@ -1,28 +1,46 @@
-/// Owns a single synthetic modifier. Releases always use the key captured at key-down, even if
-/// the selected voice tool changes. The injected sender lets tests exercise this without typing.
+public struct VoiceKeyEvent: Equatable, Sendable {
+    public let key: VoiceTriggerKey
+    public let isDown: Bool
+    public let flags: UInt64
+}
+
+/// Owns only successfully posted edges. Chord releases run in reverse order with the remaining
+/// modifier flags; failed partial presses are rolled back without leaking Space or held modifiers.
 @MainActor
 public final class VoiceKeyLatch {
-    public private(set) var heldKey: VoiceTriggerKey?
-    private let post: (VoiceTriggerKey, Bool) -> Bool
+    public private(set) var heldShortcut: VoiceShortcut?
+    public private(set) var heldKeys: [VoiceTriggerKey] = []
+    private let post: (VoiceKeyEvent) -> Bool
 
-    public init(post: @escaping (VoiceTriggerKey, Bool) -> Bool) {
+    public init(post: @escaping (VoiceKeyEvent) -> Bool) {
         self.post = post
     }
 
     @discardableResult
-    public func press(_ key: VoiceTriggerKey) -> Bool {
-        if let heldKey { return heldKey == key }
-        guard post(key, true) else { return false }
-        heldKey = key
+    public func press(_ shortcut: VoiceShortcut) -> Bool {
+        if let heldShortcut { return heldShortcut == shortcut }
+        heldShortcut = shortcut
+        for key in shortcut.keys {
+            let flags = heldFlags | key.downFlagsRawValue
+            guard post(VoiceKeyEvent(key: key, isDown: true, flags: flags)) else {
+                release()
+                return false
+            }
+            heldKeys.append(key)
+        }
         return true
     }
 
     @discardableResult
     public func release() -> Bool {
-        guard let heldKey else { return true }
-        let posted = post(heldKey, false)
-        // A failed synthetic key-up must not leave internal ownership latched forever.
-        self.heldKey = nil
-        return posted
+        var success = true
+        while let key = heldKeys.popLast() {
+            // Always attempt every owned release, even if an earlier edge failed.
+            if !post(VoiceKeyEvent(key: key, isDown: false, flags: heldFlags)) { success = false }
+        }
+        heldShortcut = nil
+        return success
     }
+
+    private var heldFlags: UInt64 { heldKeys.reduce(0) { $0 | $1.downFlagsRawValue } }
 }

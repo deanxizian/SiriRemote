@@ -53,6 +53,10 @@ jobs:
         run: swift build --package-path SiriRemoteCore
       - name: Test
         run: swift test --package-path SiriRemoteCore
+      - name: Verify platform key-repeat encoding without posting input
+        run: bash script/test_button_events.sh
+      - name: Verify production voice coordinator with isolated platform effects
+        run: bash script/test_voice_coordinator.sh
 
   voice-decoder:
     name: Opus voice decoder

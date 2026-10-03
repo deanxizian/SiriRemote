@@ -4,7 +4,7 @@ import CoreGraphics
 /// Emits only the keyboard actions owned by SiriRemote's fixed button layout.
 ///
 /// Keeping this API typed prevents hand-edited strings from reintroducing the retired generic
-/// shortcut engine. Every call posts a complete, paired key sequence.
+/// shortcut engine. Held/repeating keys use HeldButtonEmitter instead of this tap-only path.
 enum FixedKeyEmitter {
     enum Key {
         case enter

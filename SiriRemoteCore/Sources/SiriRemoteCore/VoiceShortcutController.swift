@@ -1,7 +1,7 @@
 import Foundation
 
 /// Serializes recognizer gestures on the App's existing 20 ms voice poll. No sleeping, detached
-/// tasks or uncancellable delayed key-ups. Typeless uses the same 120 ms Fn taps as remote-mic-app;
+/// tasks or uncancellable delayed key-ups. Typeless uses 120 ms start chords and plain Fn stops;
 /// Doubao holds Right Command. A new session cannot overtake the previous stop tap.
 @MainActor
 public final class VoiceShortcutController {
@@ -12,28 +12,29 @@ public final class VoiceShortcutController {
 
     private struct Request {
         let session: UInt64
-        let target: VoiceTarget
+        let shortcut: VoiceShortcut
     }
-    private let setKey: (VoiceTarget, Bool) -> Bool
+    private let setShortcut: (VoiceShortcut, Bool) -> Bool
     private let onStarted: (UInt64, Bool) -> Void
     private let onStopFailure: () -> Void
     private var current: Request?
     private var pending: Request?
     private var releaseAt: TimeInterval = 0
     private var endedDuringStart = false
-    private var keyIsDown = false
+    private var downShortcut: VoiceShortcut?
 
-    public init(setKey: @escaping (VoiceTarget, Bool) -> Bool,
+    public init(setShortcut: @escaping (VoiceShortcut, Bool) -> Bool,
                 onStarted: @escaping (UInt64, Bool) -> Void,
                 onStopFailure: @escaping () -> Void) {
-        self.setKey = setKey
+        self.setShortcut = setShortcut
         self.onStarted = onStarted
         self.onStopFailure = onStopFailure
     }
 
-    public func start(session: UInt64, target: VoiceTarget, at now: TimeInterval) {
+    public func start(session: UInt64, target: VoiceTarget, mode: TypelessVoiceMode = .dictate,
+                      at now: TimeInterval) {
         guard current?.session != session, pending?.session != session else { return }
-        let request = Request(session: session, target: target)
+        let request = Request(session: session, shortcut: VoiceShortcut(target: target, mode: mode))
         if isBusy {
             // The voice lifecycle owns at most one following session. Never replace an existing
             // pending request silently or let an overlapping start toggle the recognizer off.
@@ -55,7 +56,7 @@ public final class VoiceShortcutController {
         guard let current, current.session == session else { return }
         switch phase {
         case .held:
-            let success = releaseKey(current.target)
+            let success = releaseKey()
             finish(at: now, allowNext: success)
             if !success { onStopFailure() }
         case .startingTap:
@@ -71,7 +72,7 @@ public final class VoiceShortcutController {
         guard let request = current, now + 1e-9 >= releaseAt else { return }
         switch phase {
         case .startingTap:
-            guard releaseKey(request.target) else {
+            guard releaseKey() else {
                 finish(at: now, allowNext: false)
                 onStarted(request.session, false)
                 return
@@ -83,7 +84,7 @@ public final class VoiceShortcutController {
                 beginStop(request, at: now)
             }
         case .stoppingTap:
-            let success = releaseKey(request.target)
+            let success = releaseKey()
             finish(at: now, allowNext: success)
             if !success { onStopFailure() }
         case .idle, .held, .recording:
@@ -101,12 +102,12 @@ public final class VoiceShortcutController {
     public func shutdown() {
         pending = nil
         guard let current else { return }
-        let needsStop = current.target == .typeless
+        let needsStop = current.shortcut.target == .typeless
             && (phase == .startingTap || phase == .recording)
-        var success = releaseKey(current.target)
+        var success = releaseKey()
         if needsStop {
-            if setKey(current.target, true) {
-                success = setKey(current.target, false) && success
+            if setShortcut(current.shortcut.stopShortcut, true) {
+                success = setShortcut(current.shortcut.stopShortcut, false) && success
             } else { success = false }
         }
         self.current = nil
@@ -118,14 +119,14 @@ public final class VoiceShortcutController {
     private func begin(_ request: Request, at now: TimeInterval) {
         current = request
         endedDuringStart = false
-        guard setKey(request.target, true) else {
+        guard setShortcut(request.shortcut, true) else {
             current = nil
             phase = .idle
             onStarted(request.session, false)
             return
         }
-        keyIsDown = true
-        if request.target == .doubao {
+        downShortcut = request.shortcut
+        if request.shortcut.target == .doubao {
             phase = .held
             onStarted(request.session, true)
         } else {
@@ -135,20 +136,20 @@ public final class VoiceShortcutController {
     }
 
     private func beginStop(_ request: Request, at now: TimeInterval) {
-        guard setKey(request.target, true) else {
+        guard setShortcut(request.shortcut.stopShortcut, true) else {
             finish(at: now, allowNext: false)
             onStopFailure()
             return
         }
-        keyIsDown = true
+        downShortcut = request.shortcut.stopShortcut
         phase = .stoppingTap
         releaseAt = now + Self.tapDuration
     }
 
-    private func releaseKey(_ target: VoiceTarget) -> Bool {
-        guard keyIsDown else { return true }
-        keyIsDown = false
-        return setKey(target, false)
+    private func releaseKey() -> Bool {
+        guard let owned = downShortcut else { return true }
+        downShortcut = nil
+        return setShortcut(owned, false)
     }
 
     private func finish(at now: TimeInterval, allowNext: Bool) {

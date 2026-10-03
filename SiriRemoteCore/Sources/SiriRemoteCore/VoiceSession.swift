@@ -26,6 +26,8 @@ public struct VoiceSession {
     public private(set) var phase: Phase = .idle
     public private(set) var session: UInt64 = 0
     public private(set) var pendingPressAt: TimeInterval?
+    public private(set) var typelessMode: TypelessVoiceMode = .dictate
+    private var pendingTypelessMode: TypelessVoiceMode = .dictate
     private var pressedAt: TimeInterval?
     private var preparationDeadline: TimeInterval = 0
     private var audioGeneration: UInt64?
@@ -45,6 +47,7 @@ public struct VoiceSession {
         if phase == .draining {
             guard pendingPressAt == nil else { return [] }
             pendingPressAt = now
+            pendingTypelessMode = .dictate
             // Freeze the OLD audio range before a second physical press can add its frames.
             // A pending capture starts only after the old lease is released. The shortcut
             // controller also serializes a Typeless stop tap before the next start tap.
@@ -54,10 +57,24 @@ public struct VoiceSession {
         return start(at: now, physicalPressAt: now)
     }
 
-    private mutating func start(at now: TimeInterval, physicalPressAt: TimeInterval) -> [Command] {
+    /// The physical chord can choose a mode only before its start shortcut is posted. While an
+    /// older session drains, a new physical press owns a separate pending choice.
+    public mutating func selectTypelessMode(_ mode: TypelessVoiceMode) -> Bool {
+        if phase == .draining, pendingPressAt != nil {
+            pendingTypelessMode = mode
+            return true
+        }
+        guard phase == .priming, pressedAt != nil, !recognitionRequested else { return false }
+        typelessMode = mode
+        return true
+    }
+
+    private mutating func start(at now: TimeInterval, physicalPressAt: TimeInterval,
+                                mode: TypelessVoiceMode = .dictate) -> [Command] {
         session &+= 1
         if session == 0 { session = 1 }
         phase = .priming
+        typelessMode = mode
         pressedAt = physicalPressAt
         preparationDeadline = now + 1.5
         audioGeneration = nil
@@ -73,7 +90,11 @@ public struct VoiceSession {
     }
 
     public mutating func release(at now: TimeInterval) -> [Command] {
-        if pendingPressAt != nil { pendingPressAt = nil; return [] }
+        if pendingPressAt != nil {
+            pendingPressAt = nil
+            pendingTypelessMode = .dictate
+            return []
+        }
         guard let started = pressedAt else { return [] }
         pressedAt = nil
         if now - started + 1e-9 < SiriButtonGestureMachine.holdThreshold {
@@ -163,7 +184,9 @@ public struct VoiceSession {
         phase = .idle
         if let pending = pendingPressAt {
             pendingPressAt = nil
-            commands += start(at: now, physicalPressAt: pending)
+            let nextMode = pendingTypelessMode
+            pendingTypelessMode = .dictate
+            commands += start(at: now, physicalPressAt: pending, mode: nextMode)
         }
         return commands
     }
@@ -175,6 +198,8 @@ public struct VoiceSession {
         phase = .idle
         pressedAt = nil
         pendingPressAt = nil
+        typelessMode = .dictate
+        pendingTypelessMode = .dictate
         recognitionActive = false
         audioGeneration = nil
         if let reason { commands.append(.failure(reason)) }

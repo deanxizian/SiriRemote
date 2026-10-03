@@ -3,8 +3,8 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="$PWD"
-VERSION="${1:-0.2.1}"
-BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-5}"
+VERSION="${1:-0.3.0}"
+BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-22}"
 APP_STAGE="$ROOT/dist/build/staging/SiriRemote.app"
 RELEASE_SIGN_IDENTITY="Developer ID Application: ZIAN XI (96M7FW2XLU)"
 INSTALLER_SIGN_IDENTITY="Developer ID Installer: ZIAN XI (96M7FW2XLU)"
@@ -28,6 +28,8 @@ export SIRIREMOTE_INSTALLER_SIGN_IDENTITY="$INSTALLER_SIGN_IDENTITY"
 export SIRIREMOTE_CODESIGN_TIMESTAMP=secure
 
 (cd SiriRemoteCore && swift test)
+bash script/test_button_events.sh
+bash script/test_voice_coordinator.sh
 (cd app && ./build.sh)
 (
     cd app

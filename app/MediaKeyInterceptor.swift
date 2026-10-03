@@ -17,11 +17,13 @@ class MediaKeyInterceptor {
     /// Polls that the tap is still enabled — see the comment where it is created.
     private var healthTimer: Timer?
     private var reportedAccessibilityRevocation = false
+    private var suppression = MediaKeySuppressionPolicy<MediaKeyType>()
 
     var onMediaKey: ((MediaKeyType) -> Bool)?
+    var onVoiceVolumeButton: ((VoiceVolumeButton) -> Bool)?
     var onAccessibilityRevoked: (() -> Void)?
 
-    enum MediaKeyType {
+    enum MediaKeyType: Hashable {
         case playPause, next, previous, volumeUp, volumeDown, mute
     }
 
@@ -36,7 +38,7 @@ class MediaKeyInterceptor {
             options: .defaultTap,
             eventsOfInterest: eventMask,
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let interceptor = Unmanaged<MediaKeyInterceptor>.fromOpaque(refcon).takeUnretainedValue()
                 return interceptor.handleEvent(proxy: proxy, type: type, event: event)
             },
@@ -91,6 +93,7 @@ class MediaKeyInterceptor {
     }
     
     func stop() {
+        suppression.reset()
         healthTimer?.invalidate()
         healthTimer = nil
         if let obs = wakeObserver {
@@ -134,18 +137,18 @@ class MediaKeyInterceptor {
         
         // NX_SYSDEFINED = 14
         guard type.rawValue == 14 else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         // Get NSEvent to parse the media key
         guard let nsEvent = NSEvent(cgEvent: event) else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
 
         // Check subtype 8 = media key event
         guard nsEvent.subtype.rawValue == 8 else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
         
         // Parse the key code from data1
@@ -153,10 +156,10 @@ class MediaKeyInterceptor {
         let keyFlags = nsEvent.data1 & 0x0000FFFF
         let keyState = (keyFlags & 0xFF00) >> 8
         let isKeyDown = keyState == 0x0A
-        
-        // Only handle key down events
-        guard isKeyDown else {
-            return Unmanaged.passRetained(event)
+        let isRepeat = keyFlags & 0x01 != 0
+
+        guard keyState == 0x0A || keyState == 0x0B else {
+            return Unmanaged.passUnretained(event)
         }
         
         // Identify the media key
@@ -178,11 +181,33 @@ class MediaKeyInterceptor {
             break
         }
         
-        if let key = mediaKey, let handler = onMediaKey, handler(key) {
-            return nil // Consume event
+        if let key = mediaKey {
+            let volumeButton: VoiceVolumeButton?
+            switch key {
+            case .volumeUp: volumeButton = .up
+            case .volumeDown: volumeButton = .down
+            default: volumeButton = nil
+            }
+            let voiceHandler = onVoiceVolumeButton
+            let mediaHandler = onMediaKey
+            let suppressed = suppression.shouldSuppress(
+                key, isDown: isKeyDown, isRepeat: isRepeat, volumeButton: volumeButton,
+                handleVoiceChord: { button in
+                    // NX events do not expose a reliable remote identity. Scope this fallback to
+                    // a physical Siri hold in Typeless, not all volume events or audio sessions.
+                    let consumed = voiceHandler?(button) ?? false
+                    if consumed { rmDebug("🎚 Typeless voice chord consumed system media key \(key)") }
+                    return consumed
+                },
+                isDuplicateRemotePress: { mediaHandler?(key) ?? false }
+            )
+            if key == .mute || key == .playPause {
+                rmDebug("🎛 NX \(key) down=\(isKeyDown) repeat=\(isRepeat) suppressed=\(suppressed)")
+            }
+            if suppressed { return nil }
         }
-        
-        return Unmanaged.passRetained(event)
+
+        return Unmanaged.passUnretained(event)
     }
 
     private func reportAccessibilityRevocation() {

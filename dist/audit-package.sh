@@ -3,7 +3,7 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="$PWD"
-VERSION="${1:-0.2.1}"
+VERSION="${1:-0.3.0}"
 OUTPUT_NAME="${SIRIREMOTE_PACKAGE_OUTPUT_NAME:-out}"
 [[ "$OUTPUT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || exit 2
 FULL_PKG="$ROOT/dist/$OUTPUT_NAME/SiriRemote-$VERSION-Full-Setup.pkg"
@@ -152,6 +152,21 @@ assert_signature "$CAPTURE" SiriRemoteCapture required
 assert_signature "$ROUTER" SiriRemoteAudioRouter required
 assert_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog required
 assert_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier required
+
+for bundle in "$APP" "$DRIVER"; do
+    bundled_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+        "$bundle/Contents/Info.plist")"
+    [ "$bundled_version" = "$VERSION" ] || {
+        echo "version mismatch in $bundle: expected $VERSION, got $bundled_version" >&2
+        exit 1
+    }
+done
+app_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+driver_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$DRIVER/Contents/Info.plist")"
+[ "$app_build" = "$driver_build" ] || {
+    echo "App and HAL build numbers differ: $app_build / $driver_build" >&2
+    exit 1
+}
 
 /bin/sleep 1 &
 verifier_test_pid=$!

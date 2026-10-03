@@ -1,7 +1,6 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
-import Darwin
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -45,11 +44,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let voice = VoiceCoordinator()
         voiceCoordinator = voice
         input.onSiriButtonEdge = { [weak voice] pressed in voice?.handleSiri(pressed: pressed) }
+        input.onSiriButtonCancelled = { [weak voice] in voice?.abort(reason: "语音按键已取消") }
+        input.onVoiceVolumeButton = { [weak voice] button in
+            voice?.handleVoiceVolumeButton(button) ?? false
+        }
         input.onButtonActivity = { [weak touch] in touch?.tryReconnectTrackpad() }
 
         let model = SettingsModel(config: config)
         settingsModel = model
         model.onConfigChanged = { [weak self] updated in self?.apply(updated, isReload: true) }
+        voice.onSwitchVoiceTarget = { [weak model] in
+            guard let model else { return }
+            if let error = model.switchVoiceTarget() {
+                NSSound.beep()
+                rmDebug("🎙 double tap kept current voice target: \(error)")
+            } else {
+                rmDebug("🎙 double tap selected voice target=\(model.voiceTarget.rawValue)")
+            }
+        }
+        voice.onSwitchVoiceTargetUnavailable = {
+            NSSound.beep()
+            rmDebug("🎙 double tap kept current voice target: recording is still finishing")
+        }
 
         let window = SettingsWindowController(model: model)
         settingsWindow = window
@@ -97,8 +113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let text = try String(contentsOf: ConfigStore.path, encoding: .utf8)
             let config = try ConfigStore.loadAndValidate(text)
             ConfigStore.clearLoadError()
+            let changed = settingsModel?.config != config
             settingsModel?.replaceConfigFromDisk(config)
-            apply(config, isReload: true)
+            // A picker/double-tap save has already applied this exact configuration. Its delayed
+            // file-watcher echo must not abort a new Siri hold started just after the switch.
+            if changed { apply(config, isReload: true) }
         } catch {
             settingsModel?.reportConfigLoadError(error)
             NSLog("[SiriRemote] hot reload rejected: \(error.localizedDescription)")
@@ -134,7 +153,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startMediaInterception() {
         mediaKeyInterceptor?.stop()
         let interceptor = MediaKeyInterceptor()
-        interceptor.onMediaKey = { [weak self] key in self?.shouldConsumeMediaKey(key) ?? false }
+        interceptor.onMediaKey = { [weak remoteInputHandler] key in
+            remoteInputHandler?.shouldSuppressMediaKey(key) ?? false
+        }
+        interceptor.onVoiceVolumeButton = { [weak voiceCoordinator] button in
+            voiceCoordinator?.handleVoiceVolumeButton(button) ?? false
+        }
         interceptor.onAccessibilityRevoked = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -145,22 +169,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         interceptor.start()
         mediaKeyInterceptor = interceptor
-    }
-
-    private func shouldConsumeMediaKey(_ key: MediaKeyInterceptor.MediaKeyType) -> Bool {
-        let button: String
-        switch key {
-        case .playPause: button = "playPause"
-        case .next: button = "nextTrack"
-        case .previous: button = "prevTrack"
-        case .volumeUp: button = "volumeUp"
-        case .volumeDown: button = "volumeDown"
-        case .mute: button = "mute"
-        }
-        let fromRemote = RemoteInputHandler.lastProcessedButton == button
-            && Self.secondsSince(RemoteInputHandler.lastProcessedTime) < 0.3
-        let fixedMediaButtons: Set<String> = ["playPause", "volumeUp", "volumeDown", "mute"]
-        return fromRemote && fixedMediaButtons.contains(button)
     }
 
     private func installLifecycleObservers() {
@@ -357,15 +365,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         srm_remote_audio_state_close()
     }
 
-    private static let timebase: mach_timebase_info_data_t = {
-        var value = mach_timebase_info_data_t()
-        mach_timebase_info(&value)
-        return value
-    }()
-
-    private static func secondsSince(_ start: UInt64) -> Double {
-        guard start > 0 else { return .infinity }
-        let elapsed = mach_absolute_time() &- start
-        return Double(elapsed) * Double(timebase.numer) / Double(timebase.denom) / 1_000_000_000
-    }
 }

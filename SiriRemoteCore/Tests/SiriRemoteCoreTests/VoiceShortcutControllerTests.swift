@@ -6,15 +6,17 @@ final class VoiceShortcutControllerTests: XCTestCase {
     private final class Harness {
         var keys: [Bool] = []
         var targets: [VoiceTarget] = []
+        var shortcuts: [VoiceShortcut] = []
         var started: [UInt64] = []
         var failed: [UInt64] = []
         var stopFailures = 0
         var allowDown = true
         var allowUp = true
         lazy var shortcut = VoiceShortcutController(
-            setKey: { [unowned self] target, down in
+            setShortcut: { [unowned self] shortcut, down in
                 keys.append(down)
-                targets.append(target)
+                targets.append(shortcut.target)
+                shortcuts.append(shortcut)
                 return down ? allowDown : allowUp
             },
             onStarted: { [unowned self] id, success in
@@ -185,7 +187,7 @@ final class VoiceShortcutControllerTests: XCTestCase {
         var keys: [Bool] = []
         var shortcut: VoiceShortcutController!
         shortcut = VoiceShortcutController(
-            setKey: { _, down in keys.append(down); return true },
+            setShortcut: { _, down in keys.append(down); return true },
             onStarted: { id, _ in shortcut.end(session: id, at: 0.12) },
             onStopFailure: { XCTFail("Unexpected stop failure") }
         )
@@ -194,5 +196,55 @@ final class VoiceShortcutControllerTests: XCTestCase {
         shortcut.poll(at: 0.12)
         shortcut.poll(at: 0.24)
         XCTAssertEqual(keys, [true, false, true, false])
+    }
+
+    @MainActor func testEveryTypelessModeStopsWithPlainFn() async {
+        for mode in TypelessVoiceMode.allCases {
+            let h = Harness()
+            h.shortcut.start(session: 1, target: .typeless, mode: mode, at: 0)
+            h.shortcut.poll(at: 0.12)
+            h.shortcut.end(session: 1, at: 1)
+            h.shortcut.poll(at: 1.12)
+            XCTAssertEqual(h.keys, [true, false, true, false])
+            XCTAssertEqual(h.shortcuts, [.typeless(mode), .typeless(mode),
+                                         .typeless(.dictate), .typeless(.dictate)])
+        }
+    }
+
+    @MainActor func testEveryModeShutsDownWithOnePlainFnStop() async {
+        for mode in TypelessVoiceMode.allCases {
+            for phase in 0...2 {
+                let h = Harness()
+                h.shortcut.start(session: 1, target: .typeless, mode: mode, at: 0)
+                if phase >= 1 { h.shortcut.poll(at: 0.12) }
+                if phase >= 2 { h.shortcut.end(session: 1, at: 1) }
+                h.shortcut.shutdown()
+                h.shortcut.shutdown()
+                h.shortcut.poll(at: 10)
+                XCTAssertEqual(h.keys, [true, false, true, false])
+                XCTAssertEqual(h.shortcuts, [.typeless(mode), .typeless(mode),
+                                             .typeless(.dictate), .typeless(.dictate)])
+                XCTAssertFalse(h.shortcut.isBusy)
+            }
+        }
+    }
+
+    @MainActor func testQueuedModeIsNotReplacedByPreviousStartChord() async {
+        let h = Harness()
+        h.shortcut.start(session: 1, target: .typeless, mode: .translate, at: 0)
+        h.shortcut.poll(at: 0.12)
+        h.shortcut.end(session: 1, at: 1)
+        h.shortcut.start(session: 2, target: .typeless, mode: .askAnything, at: 1.01)
+        h.shortcut.poll(at: 1.12)
+        h.shortcut.poll(at: 1.24)
+        h.shortcut.end(session: 1, at: 2)
+        h.shortcut.end(session: 2, at: 2)
+        h.shortcut.poll(at: 2.12)
+        XCTAssertEqual(h.shortcuts, [.typeless(.translate), .typeless(.translate),
+                                     .typeless(.dictate), .typeless(.dictate),
+                                     .typeless(.askAnything), .typeless(.askAnything),
+                                     .typeless(.dictate), .typeless(.dictate)])
+        XCTAssertEqual(h.started, [1, 2])
+        XCTAssertFalse(h.shortcut.isBusy)
     }
 }

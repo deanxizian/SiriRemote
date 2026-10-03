@@ -257,7 +257,7 @@ private struct ControlSettingsView: View {
                 LabeledContent(L("Center Button"), value: L("Return")).settingsRow()
                 LabeledContent(
                     L("Back Button"),
-                    value: L("Delete (hold to repeat)")
+                    value: L("Delete")
                 ).settingsRow()
                 LabeledContent(
                     L("Up / Down / Left / Right"),
@@ -265,16 +265,30 @@ private struct ControlSettingsView: View {
                 ).settingsRow()
                 LabeledContent(
                     L("Play/Pause Button"),
-                    value: L("Play or pause media")
+                    value: L("Play / Pause")
                 ).settingsRow()
-                LabeledContent(L("Mute Button"), value: L("Mute or unmute")).settingsRow()
+                LabeledContent(L("Mute Button"), value: L("Mute / Unmute")).settingsRow()
                 LabeledContent(
                     L("Volume Up/Down Buttons"),
-                    value: L("Adjust system volume")
+                    value: L("Adjust Volume")
+                ).settingsRow()
+            }
+            Section(L("Siri Voice Button")) {
+                LabeledContent(L("Single Tap"), value: L("Send Return")).settingsRow()
+                LabeledContent(
+                    L("Double Tap"),
+                    value: L("Switch Doubao / Typeless")
+                ).settingsRow()
+                LabeledContent(L("Hold"), value: L("Voice Input")).settingsRow()
+            }
+            Section(L("Typeless Shortcuts")) {
+                LabeledContent(
+                    L("Siri Voice Button + Volume Up"),
+                    value: L("Translate")
                 ).settingsRow()
                 LabeledContent(
-                    L("Voice Button"),
-                    value: L("Tap to send; hold for voice input")
+                    L("Siri Voice Button + Volume Down"),
+                    value: L("Ask Anything")
                 ).settingsRow()
             }
         }

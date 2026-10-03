@@ -78,6 +78,22 @@ final class SettingsModel: ObservableObject {
         commit(config.withSettingsUpdated(change))
     }
 
+    /// Uses the same persistent setting as the picker. No window activation, input-source
+    /// selection or third-party app launching is needed just to choose the next voice target.
+    func switchVoiceTarget() -> String? {
+        refreshStatus()
+        let current = voiceTarget
+        guard current.canSwitchToAlternate(
+            doubaoEnabled: readiness.doubaoInputSourceEnabled,
+            typelessRunning: readiness.typelessStatus == .running
+        ) else {
+            return current.alternate == .doubao
+                ? L("Enable Doubao Input Method first") : L("Start Typeless first")
+        }
+        if commit(config.withSettingsUpdated({ $0.voiceTarget = current.alternate })) { return nil }
+        return configSaveError ?? L("Unknown Error")
+    }
+
     func resetDefaults() {
         do {
             let defaults = try ConfigStore.loadAndValidate(ConfigStore.defaultTemplate)
@@ -87,8 +103,9 @@ final class SettingsModel: ObservableObject {
         }
     }
 
-    private func commit(_ updated: Config) {
-        guard updated != config else { return }
+    @discardableResult
+    private func commit(_ updated: Config) -> Bool {
+        guard updated != config else { return true }
         do {
             try ConfigStore.save(updated)
             ConfigStore.clearLoadError()
@@ -96,8 +113,10 @@ final class SettingsModel: ObservableObject {
             configLoadError = nil
             configSaveError = nil
             onConfigChanged?(updated)
+            return true
         } catch {
             configSaveError = error.localizedDescription
+            return false
         }
     }
 
