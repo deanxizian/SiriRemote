@@ -24,7 +24,9 @@ request when tested locally.
 HAL tests load the bundle in-process with private user-only shared memory, including sanitized
 cold-attach, revoked-generation and sealed-drain regressions. Never point fixtures at production
 PCM. Capture tests exercise kernel XPC message identity and reject forged product metadata. The
-pure Doubao session engine is the same implementation compiled into the App, not a test-only model.
+production `VoiceSession`, `VoiceShortcutController` and `VoiceKeyLatch` are the same implementations
+compiled into the App, not test-only models. Tests cover Doubao's Right Command hold and Typeless's
+paired Fn taps without posting real keyboard events.
 Changes to shared ABI or Capture control require a full component install, not an App-only reload.
 
 Official local deployments and packages require the maintainer's stable Developer ID identity.

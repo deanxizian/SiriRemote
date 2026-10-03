@@ -3,7 +3,7 @@ import Foundation
 /// Product configuration for the fixed-layout SiriRemote app.
 ///
 /// Button behavior is intentionally not configurable. Keeping the persisted model limited to
-/// touch and scrolling prevents retired mapping, profile, and voice settings from silently
+/// touch, scrolling and the voice destination prevents retired mapping and profile settings from silently
 /// returning through hand-edited configuration files.
 public struct Config: Equatable, Codable, Sendable {
     public var settings: Settings
@@ -13,6 +13,7 @@ public struct Config: Equatable, Codable, Sendable {
     }
 
     public struct Settings: Equatable, Codable, Sendable {
+        public var voiceTarget: VoiceTarget
         public var touchEnabled: Bool
         public var cursorSpeed: Double
         public var cursorDeadzone: Double
@@ -26,6 +27,7 @@ public struct Config: Equatable, Codable, Sendable {
         public var circularScroll: CircularScrollConfig
 
         public init(
+            voiceTarget: VoiceTarget = .doubao,
             touchEnabled: Bool = true,
             cursorSpeed: Double = 0.6,
             cursorDeadzone: Double = 0.006,
@@ -38,6 +40,7 @@ public struct Config: Equatable, Codable, Sendable {
             pressMoveMax: Double = 0.025,
             circularScroll: CircularScrollConfig = .default
         ) {
+            self.voiceTarget = voiceTarget
             self.touchEnabled = touchEnabled
             self.cursorSpeed = cursorSpeed
             self.cursorDeadzone = cursorDeadzone
@@ -54,6 +57,7 @@ public struct Config: Equatable, Codable, Sendable {
         public static let `default` = Settings()
 
         private enum CodingKeys: String, CodingKey {
+            case voiceTarget
             case touchEnabled, cursorSpeed, cursorDeadzone
             case accelMin, accelMax, accelLowSpeed, accelHighSpeed, accelCurve
             case clickRiseThreshold, pressMoveMax, circularScroll
@@ -62,6 +66,8 @@ public struct Config: Equatable, Codable, Sendable {
         public init(from decoder: Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             let defaults = Settings.default
+            voiceTarget = try values.decodeIfPresent(VoiceTarget.self, forKey: .voiceTarget)
+                ?? defaults.voiceTarget
             touchEnabled = try values.decodeIfPresent(Bool.self, forKey: .touchEnabled)
                 ?? defaults.touchEnabled
             cursorSpeed = try values.decodeIfPresent(Double.self, forKey: .cursorSpeed)

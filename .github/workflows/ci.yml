@@ -73,7 +73,7 @@ jobs:
         run: SIRIREMOTE_COMPILE_ONLY=1 ./build.sh
 
   app:
-    # Uses the same DoubaoVoiceSession implementation covered by the Core job.
+    # Uses the same VoiceSession and VoiceShortcutController covered by the Core job.
     name: App (compiles and links)
     runs-on: macos-15
     steps:

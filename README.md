@@ -5,7 +5,9 @@
 [下载最新版本](https://github.com/deanxizian/SiriRemote/releases/latest) · [更新记录](CHANGELOG.md)
 
 SiriRemote 是一款面向 **Apple TV Siri Remote 第三代（A2854）** 的 macOS 菜单栏应用，
-提供 Mac 触控、固定按键控制，以及遥控器实体麦克风到豆包输入法的语音输入。
+提供 Mac 触控、固定按键控制，以及遥控器实体麦克风到豆包输入法或 Typeless 的语音输入。
+
+> 本分支新增 Typeless，并将豆包长按键改为右 Command；已发布的 0.2.1 仍为豆包 Fn 模式。
 
 这是非官方社区项目，与 Apple 或字节跳动无隶属关系。触控和遥控器语音依赖未公开的
 macOS/蓝牙接口，升级系统前请保留可用安装包和卸载包。
@@ -15,8 +17,8 @@ macOS/蓝牙接口，升级系统前请保留可用安装包和卸载包。
 - 触摸板指针、轻触左键、双指手势和独立开关的外圈圆周滚动。
 - 固定的方向键、媒体键、锁屏、连续删除和 App 切换操作。
 - Siri 键支持短按 Return 和按住说话两种手势。
-- A2854 实体麦克风通过 `Siri Remote Mic` 输入豆包语音。
-- 断连、睡眠、权限撤销或退出时自动释放鼠标键、Command、Fn 和延迟动作。
+- A2854 实体麦克风通过 `Siri Remote Mic` 输入豆包或 Typeless。
+- 断连、睡眠、权限撤销或退出时自动释放鼠标键、Command（包括语音使用的右 Command）、Fn 和延迟动作。
 - 关闭主窗口后隐藏 Dock 图标，仅在菜单栏后台运行。
 
 SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管一只 A2854；
@@ -31,7 +33,7 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 | 遥控器 | Apple TV Siri Remote 第三代 A2854（USB-C） |
 | 蓝牙 | 遥控器已在 macOS 蓝牙设置中配对并连接 |
 | 权限 | SiriRemote 的“辅助功能”权限 |
-| 语音输入 | 已安装并启用豆包输入法 |
+| 语音输入 | 已启用的豆包输入法，或已运行的 Typeless（二选一） |
 | 蓝牙语音采集 | Apple PacketLogger，位于 `/Applications/PacketLogger.app` |
 | 安装 | 管理员权限，用于安装 Capture 服务和 CoreAudio HAL 驱动 |
 
@@ -98,14 +100,34 @@ shasum -a 256 -c SiriRemote-0.2.1-SHA256SUMS.txt
 在 SiriRemote 的“权限”页点击未授权的“辅助功能”状态行并完成授权。应用会自动恢复输入；
 若 macOS 仍保留旧 HID 授权状态，应用会安全释放输入并自动重启一次。
 
-### 5. 配置豆包输入法
+### 5. 选择语音工具
+
+在 SiriRemote 的“语音”页选择 **豆包输入法** 或 **Typeless**。原有配置默认保持豆包。
+
+#### 豆包输入法
 
 1. 在“系统设置 → 键盘 → 输入法”中安装并启用豆包输入法。
-2. 在豆包输入法的麦克风设置中选择 **Siri Remote Mic**。
+2. 在豆包设置中，将 **长按模式** 快捷键改为 **右 Command（⌘）**，麦克风选择 **Siri Remote Mic**。
 3. 在任意可编辑文本框中测试遥控器 Siri 键。
 
 SiriRemote 不会修改 macOS 默认输入设备。开始语音时，如果当前不是豆包输入法，应用只会
-切换一次到豆包，等待前台文字输入上下文生效后再按下 Fn；语音结束后保持豆包，不切回原输入法。
+切换一次到豆包，等待前台文字输入上下文生效后再保持右 Command；语音结束后保持豆包，不切回原输入法。
+右 Option（⌥）可保留给豆包免按模式，SiriRemote 不发送它。豆包长按模式不要继续绑定 Fn。
+
+#### Typeless
+
+1. 安装并运行 [Typeless](https://www.typeless.com/)，完成它自己的麦克风和辅助功能授权。
+2. 在 Typeless 设置中，将 **Dictate（听写）快捷键设为 Fn**，麦克风选择 **Siri Remote Mic**，不要使用 Auto-detect。
+3. 在 SiriRemote“语音”页选择 **Typeless**，然后点击目标输入框，按住遥控器 Siri 键说话、松开结束。
+
+Typeless 模式不切换系统输入法、不改变系统默认麦克风，也不在录音时激活 Typeless 窗口。
+SiriRemote 在音频就绪后点按一次 Fn，排空尾音后再点按一次；每次点按保持 120 ms。
+这是把遥控器的按住操作适配到 Typeless 的开/关式快捷键，并非松开遥控器后继续收音。
+参见 [Typeless 快捷键与麦克风设置](https://www.typeless.com/help/quickstart/settings)。
+
+“运行中”只确认 Typeless 进程存在，不代表已验证其权限、快捷键或麦克风。
+录音期间不要另用键盘 Fn 或 Typeless 按钮切换录音状态。豆包使用右 Command、Typeless 使用 Fn，
+避免两个工具同时响应；如其他语音软件也响应 Fn，请先关闭其冲突快捷键。
 
 ## 固定按键布局
 
@@ -122,7 +144,7 @@ SiriRemote 不会修改 macOS 默认输入设备。开始语音时，如果当�
 | 播放 / 暂停 | 系统播放 / 暂停 |
 | 静音 | 系统静音 |
 | 音量加 / 减 | 系统音量加 / 减 |
-| Siri 键 | 短按 Return，按住调用豆包语音 |
+| Siri 键 | 短按 Return，按住调用所选语音工具 |
 
 电源键只能锁定或唤醒锁屏界面，第三方应用不能绕过密码、Touch ID 或系统认证来解锁 Mac。
 
@@ -133,8 +155,8 @@ SiriRemote 不会修改 macOS 默认输入设备。开始语音时，如果当�
 | 短按后松开 | 立即发送 Return |
 | 按住至少 300 ms | 开始按住说话；松开后结束录音 |
 
-按下时会预热采集；按住达到 300 ms 且输入法与音频就绪后才发送 Fn down，短按不会打开语音。1.5 秒内未准备好时
-会安全中止并释放 Fn。
+按下时会预热采集；按住达到 300 ms 且语音工具与音频就绪后才发送对应语音快捷键，短按不会打开语音。
+1.5 秒内未准备好时会安全中止并释放已按下的键。
 
 ## 设置窗口
 
@@ -142,7 +164,7 @@ SiriRemote 不会修改 macOS 默认输入设备。开始语音时，如果当�
 
 - **触摸**：触摸板开关、外圈滚轮开关、带档位的指针和滚动速度，以及恢复默认设置。
 - **控制**：查看当前固定按键布局。
-- **语音**：显示 A2854、Apple PacketLogger 和豆包输入法状态；仅在异常时提供对应跳转。
+- **语音**：选择豆包或 Typeless；连接区显示遥控器、PacketLogger 和当前所选工具的状态。切换时只替换工具状态行，其他布局不变。
 - **权限**：显示辅助功能授权状态、设置开机自启动，并在权限缺失时打开正确的系统设置页面。
 
 触摸关闭后，指针、轻触、拖动和双指手势停止，外圈滚轮仍由独立开关控制。
@@ -158,13 +180,14 @@ A2854 实体麦克风
 → 48 kHz 单声道 PCM
 → 双声道共享 Ring
 → Siri Remote Mic
-→ 豆包输入法
+→ 豆包输入法 / Typeless
 ```
 
 PacketLogger 只记录蓝牙 HCI 数据；SiriRemote 重组 ACL/L2CAP/ATT Notification、校验并
 解码 Opus，再将单声道 PCM 复制为双声道交给虚拟麦克风。
 
-应用切换到已启用的豆包输入法后发送配对的 Fn down/up；松开后等待最后一帧后的 80 ms
+豆包模式切换到已启用的输入法并保持右 Command；Typeless 模式不切换输入法，使用两次配对的 Fn 点按。
+松开遥控器后等待最后一帧后的 80 ms
 安静窗口（收尾上限 300 ms），再最多等待 750 ms 排空音频。收尾时再次按住 Siri 会保留
 这次按下，上一句结束后接续新会话；新旧音频按 generation 隔离。
 
@@ -172,18 +195,18 @@ PacketLogger 只记录蓝牙 HCI 数据；SiriRemote 重组 ACL/L2CAP/ATT Notifi
 
 | 组件 | 作用 | 空闲行为 |
 | --- | --- | --- |
-| `SiriRemote.app` | HID、触控、按键、设置和豆包会话协调 | 常驻菜单栏 |
+| `SiriRemote.app` | HID、触控、按键、设置和语音会话协调 | 常驻菜单栏 |
 | `SiriRemoteCapture` | 系统级 Capture 服务，管理固定采集流程 | 常驻但不启动重型采集 |
 | Apple PacketLogger | 捕获 A2854 的蓝牙 HCI 数据 | 不运行 |
 | `SiriRemoteAudioRouter` | 解析 `.pklg`、解码 Opus、写共享 Ring | 不运行 |
 | `SiriRemoteAudio.driver` | 向 CoreAudio 发布 `Siri Remote Mic` | 无生产者时输出静音 |
 
-PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启动。仅仅打开豆包、枚举
+PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启动。仅仅打开语音工具、枚举
 虚拟麦克风或保持 SiriRemote 空闲，不应启动采集链路。
 
 ## 权限与异常恢复
 
-- 撤销辅助功能权限时，应用先停止触摸和 HID 输入，再强制释放 mouseUp、Fn、Command、
+- 撤销辅助功能权限时，应用先停止触摸和 HID 输入，再强制释放 mouseUp、右 Command、Fn、App 切换用的 Command、
   Delete 重复计时器及所有待执行手势，避免系统输入卡在按下状态。
 - 重新授权后会自动重新建立遥控器检测；如果进程级 HID 授权仍旧失效，只自动重启一次。
 - 断连、睡眠、PacketLogger 或路由器异常、权限丢失和应用退出都会使当前语音 generation
@@ -206,18 +229,18 @@ PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启�
 
 检查辅助功能权限并等待自动恢复；不要同时运行多个 SiriRemote 副本。
 
-### 按 Siri 键没有出现豆包语音界面
+### 按 Siri 键没有出现语音界面
 
 确认：
 
 1. 当前有可接收文字的输入框焦点。
-2. 豆包输入法已在系统输入法列表中启用。
+2. 所选豆包输入法已启用且长按模式快捷键为右 Command；或 Typeless 已运行且听写快捷键为 Fn。
 3. `PacketLogger.app` 位于 `/Applications`。
 4. 按住 Siri 键至少 300 ms。
 
-### 豆包界面出现，但没有波形或无法识别
+### 语音界面出现，但没有波形或无法识别
 
-在豆包输入法中确认麦克风为 **Siri Remote Mic**，再检查语音页状态。设备可见不代表遥控器
+在所选语音工具中确认麦克风为 **Siri Remote Mic**，再检查语音页状态。设备可见不代表遥控器
 音频已到达，因为虚拟麦克风在无生产者时会输出静音。
 
 ### 查看诊断日志
@@ -283,8 +306,8 @@ SiriRemote-0.2.1-SHA256SUMS.txt
 项目内 bundle，以免 TCC 权限、进程状态和实际测试版本不一致。
 
 该开发入口只更新 App。修改 Capture、Router、HAL 或共享 ABI 时，必须构建并安装完整包。
-CI 同时覆盖实际豆包会话状态机、Capture 身份校验、Router/解析器、HAL 多客户端 I/O，
-以及 ASan/UBSan 下的冷启动挂接、失效会话静音和尾音排空；不代替遥控器和豆包实机验收。
+CI 同时覆盖实际语音会话状态机、豆包右 Command / Typeless Fn 手势、Capture 身份校验、Router/解析器、HAL 多客户端 I/O，
+以及 ASan/UBSan 下的冷启动挂接、失效会话静音和尾音排空；不代替遥控器与语音工具的实机验收。
 
 仅运行 Core 单元测试：
 
@@ -302,7 +325,7 @@ App 使用 Developer ID Application 证书签名，但为兼容私有 `Multitouc
 ```text
 SiriRemote/
 ├── SiriRemoteCore/     纯 Swift 状态机、配置模型和单元测试
-├── app/                macOS App、HID、触控、固定按键、豆包协调与设置 UI
+├── app/                macOS App、HID、触控、固定按键、语音协调与设置 UI
 ├── mic/
 │   ├── captured/       按需 Capture LaunchDaemon
 │   ├── router/         PacketLogger tail、协议解析、Opus 解码和 Ring 写入

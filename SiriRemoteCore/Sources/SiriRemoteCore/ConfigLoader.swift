@@ -15,7 +15,7 @@ public enum ConfigError: Error, LocalizedError, Equatable {
 public enum ConfigLoader {
     private static let topLevelKeys: Set<String> = ["settings"]
     private static let settingKeys: Set<String> = [
-        "touchEnabled", "cursorSpeed", "cursorDeadzone",
+        "voiceTarget", "touchEnabled", "cursorSpeed", "cursorDeadzone",
         "accelMin", "accelMax", "accelLowSpeed", "accelHighSpeed", "accelCurve",
         "clickRiseThreshold", "pressMoveMax", "circularScroll",
     ]

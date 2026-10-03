@@ -20,6 +20,7 @@ final class SettingsModel: ObservableObject {
     }
 
     var touchEnabled: Bool { config.settings.touchEnabled }
+    var voiceTarget: VoiceTarget { config.settings.voiceTarget }
     var circularScrollEnabled: Bool { config.settings.circularScroll.enabled }
     var cursorSpeed: Double { config.settings.cursorSpeed }
     var scrollSpeed: Double { config.settings.circularScroll.pixelsPerRadian }
@@ -80,7 +81,7 @@ final class SettingsModel: ObservableObject {
     func resetDefaults() {
         do {
             let defaults = try ConfigStore.loadAndValidate(ConfigStore.defaultTemplate)
-            commit(defaults)
+            commit(defaults.withSettingsUpdated { $0.voiceTarget = config.settings.voiceTarget })
         } catch {
             configSaveError = error.localizedDescription
         }

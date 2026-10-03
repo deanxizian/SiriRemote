@@ -69,6 +69,10 @@ private let chineseStrings: [String: String] = [
     "Tap to send; hold for voice input": "单击发送；按住语音输入",
 
     // Voice connections
+    "Voice Input": "语音输入",
+    "Voice App": "语音工具",
+    "Not Running": "未运行",
+    "Running": "运行中",
     "Connections": "连接",
     "Apple TV Remote": "Apple TV 遥控器",
     "Installed": "已安装",

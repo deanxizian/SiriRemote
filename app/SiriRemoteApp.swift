@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var configWatcher: ConfigFileWatcher?
     private var settingsModel: SettingsModel?
     private var settingsWindow: SettingsWindowController?
-    private var voiceCoordinator: DoubaoVoiceCoordinator?
+    private var voiceCoordinator: VoiceCoordinator?
     private var permissionTimer: Timer?
     private var permissionActivationObserver: NSObjectProtocol?
     private var inputSourcesObserver: NSObjectProtocol?
@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         touch.onTwoFingerTap = { [weak cursor] in cursor?.performRightClick() }
         touchHandler = touch
 
-        let voice = DoubaoVoiceCoordinator()
+        let voice = VoiceCoordinator()
         voiceCoordinator = voice
         input.onSiriButtonEdge = { [weak voice] pressed in voice?.handleSiri(pressed: pressed) }
         input.onButtonActivity = { [weak touch] in touch?.tryReconnectTrackpad() }
@@ -70,8 +70,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func apply(_ config: Config, isReload: Bool) {
-        if isReload { remoteInputHandler?.prepareForConfigurationReload() }
+        if isReload {
+            voiceCoordinator?.abort(reason: "配置已更改")
+            remoteInputHandler?.prepareForConfigurationReload()
+        }
         let settings = config.settings
+        voiceCoordinator?.setTarget(settings.voiceTarget)
         touchHandler?.setTouchEnabled(settings.touchEnabled)
         touchHandler?.cursorSpeed = CGFloat(settings.cursorSpeed)
         touchHandler?.cursorDeadzone = CGFloat(settings.cursorDeadzone)

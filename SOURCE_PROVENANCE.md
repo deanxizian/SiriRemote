@@ -13,6 +13,15 @@ SiriRemoteForge itself contains code derived from
 `b233a88cc4457b00413dda6b37ec8b4af12c5121` was consulted as a behavioral
 reference only. No icon or other proprietary asset was copied.
 
+Typeless behavior was additionally checked against remote-mic-app commit
+`764c18a762a36d1ca70a2e9aee90dea96a9f0cf8`: `VoiceFnTapSessionController.swift`
+(120 ms paired Fn taps, drain before stop, and cancellation ownership),
+`VoiceKeyMode.swift` and `KeyboardInjector.swift` (Right Command keycode 54 with
+`maskCommand | NX_DEVICERCMDKEYMASK`, Fn keycode 63 with `maskSecondaryFn`, paired key-up),
+`OnboardingFlow.swift` (Typeless bundle identifier), and the preferred-input-source policy
+(standalone Typeless does not select a TIS input source). The integration below is independently
+implemented on SiriRemote's existing audio lifecycle; no assets or full upstream controller were copied.
+
 ## File-level record
 
 | Files | Origin | Changes in SiriRemote |
@@ -23,10 +32,11 @@ reference only. No icon or other proprietary asset was copied.
 | `app/TouchHandler.swift`, `CursorController.swift`, `MultitouchSupport.h` | Forge `781a738`; HyperVibe `1e7746a` lineage | Retains touch, pointer acceleration, subpixel movement, multi-display edges, two-finger and circular scrolling; adds independent runtime gates and teardown. |
 | `app/MediaController.swift`, `MediaKeyInterceptor.swift`, `MenuBarManager.swift` | Forge `781a738`; HyperVibe lineage | Reduced to the fixed controls and simplified SiriRemote menu. |
 | `SiriRemoteCore/Sources/**` | Forge `781a738`, substantially reduced | Provides the settings schema, independent touch gates, held-input safety, permission recovery, multi-interface aggregation and remote-voice state machines. Generic mapping, shortcut and ordinary-button gesture types were removed. |
-| `app/ConfigStore.swift`, `SettingsModel.swift`, `SettingsView.swift`, `SettingsWindow.swift` | Forge `781a738`, substantially rewritten | Four settings pages separate permissions, touch/ring controls, fixed button behavior and voice readiness. Configuration persists only touch and circular-scroll settings; retired mapping/profile files are archived rather than migrated. |
+| `app/ConfigStore.swift`, `SettingsModel.swift`, `SettingsView.swift`, `SettingsWindow.swift` | Forge `781a738`, substantially rewritten | Four settings pages separate permissions, touch/ring controls, fixed button behavior and voice readiness. Configuration persists touch, circular scroll and the voice target; retired mapping/profile files are archived rather than migrated. |
 | `app/DoubaoInputSourceCoordinator.swift` | New integration; remote-mic-app `b233a88` reference | Selects the fixed, already-enabled Doubao Pinyin TIS mode and never calls the onboarding-only enable API from a Siri-button event. The selected source intentionally remains active after voice input. |
-| `app/FunctionKeyLatch.swift` | New integration; remote-mic-app `b233a88` reference | Idempotent CGEvent keycode 63 + `maskSecondaryFn` hold: one down when the voice session becomes ready and one up after teardown/drain. |
-| `app/DoubaoVoiceCoordinator.swift`, `RemoteAudioDemand.swift`, `RemoteAudioState.*`, `SiriRemoteCore/.../DoubaoVoiceSession.swift` | New integration; Forge audio and remote-mic-app lifecycle references | Production testable PTT engine: shared 300 ms hold threshold, 1.5 s preparation bound, one input-source selection, paired Fn, generation checks, pending press during drain, an 80 ms last-frame quiet window bounded at 300 ms and a 750 ms sealed drain. The App only receives authenticated XPC counters and never maps PCM. |
+| `app/VoiceKeyEmitter.swift`, `SiriRemoteCore/.../VoiceKeyLatch.swift` and related tests | New integration; remote-mic-app `b233a88` and `764c18a` behavioral references | Pairs Doubao Right Command (54, command + right-side flag) and Typeless Fn (63, secondary Fn). Captures the held key for release, rejects conflicting downs and tests constants against macOS SDK headers without posting events. Right Option is reserved for Doubao hands-free mode and is never emitted. Timing is owned by `VoiceShortcutController`. |
+| `app/VoiceCoordinator.swift`, `RemoteAudioDemand.swift`, `RemoteAudioState.*`, `SiriRemoteCore/.../VoiceSession.swift` | New integration; Forge audio and remote-mic-app lifecycle references | Shared PTT engine: 300 ms hold threshold, 1.5 s preparation bound, generation checks, pending press during drain, an 80 ms last-frame quiet window bounded at 300 ms and a 750 ms sealed drain. Only Doubao selects an input source. The App receives authenticated XPC counters and never maps PCM. |
+| `SiriRemoteCore/.../VoiceTarget.swift`, `VoiceShortcutController.swift`, `app/TypelessIntegration.swift` and related tests | New implementation; remote-mic-app `764c18a` behavioral reference | Doubao Right Command holds and Typeless 120 ms Fn start/stop taps share one serialized controller. Poll-driven, generation-scoped cleanup and queued-start cancellation prevent delayed events from toggling a following session. Typeless discovery uses only public AppKit APIs. |
 | `mic/OpusVoiceDecoder.swift`, `mic/router/PklgTailReader.swift`, `VoiceFrameParser.swift` | Forge `781a738` | Retains PacketLogger tailing, ACL/L2CAP/ATT validation, dynamic voice handle and Opus decoding; cloud transcription and monitor playback removed. |
 | `mic/router/SiriRemoteMicRouter.swift`, `SiriRemoteMicRingWriter.*` | Forge `781a738`, rewritten | Session-only decoder process and mono-to-stereo writer for the new shared ABI. |
 | `mic/captured/srm_captured.c`, `srm_runtime_directory.*` | Forge `781a738`, adapted; runtime policy/tests new | Fixed PacketLogger workflow, protected root-owned Apple-signed snapshot and restrictive capture-file permissions. Authenticated connection-owned leases replace PID-based Darwin demand; revoke audio before asynchronous SIGTERM/reaping, with bounded SIGKILL escalation. Startup prepares silent PCM before serving input clients. |

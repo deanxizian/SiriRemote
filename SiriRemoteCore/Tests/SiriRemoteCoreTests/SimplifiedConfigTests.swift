@@ -13,6 +13,7 @@ final class SimplifiedConfigTests: XCTestCase {
         XCTAssertTrue(config.settings.touchEnabled)
         XCTAssertTrue(config.settings.circularScroll.enabled)
         XCTAssertEqual(config.settings.cursorSpeed, 0.6)
+        XCTAssertEqual(config.settings.voiceTarget, .doubao)
     }
 
     func testRoundTripKeepsSettingsOnlySchema() throws {
@@ -60,5 +61,18 @@ final class SimplifiedConfigTests: XCTestCase {
         let changed = original.withSettingsUpdated { $0.touchEnabled = false }
         XCTAssertTrue(original.settings.touchEnabled)
         XCTAssertFalse(changed.settings.touchEnabled)
+    }
+
+    func testTypelessSelectionPersistsWithoutInputSourceSwitching() throws {
+        let config = try ConfigLoader.load("""
+        { "settings": { "voiceTarget": "typeless", "cursorSpeed": 1.0 } }
+        """)
+        XCTAssertEqual(config.settings.voiceTarget, .typeless)
+        XCTAssertFalse(config.settings.voiceTarget.requiresInputSourceSelection)
+        XCTAssertTrue(VoiceTarget.doubao.requiresInputSourceSelection)
+        XCTAssertEqual(try ConfigLoader.load(ConfigWriter.serialize(config)), config)
+        XCTAssertThrowsError(try ConfigLoader.load("""
+        { "settings": { "voiceTarget": "unknown" } }
+        """))
     }
 }

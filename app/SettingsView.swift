@@ -333,6 +333,16 @@ private struct VoiceSettingsView: View {
 
     var body: some View {
         Form {
+            Section(L("Voice Input")) {
+                Picker(L("Voice App"), selection: Binding(
+                    get: { model.voiceTarget },
+                    set: { value in model.updateSettings { $0.voiceTarget = value } }
+                )) {
+                    Text(L("Doubao Input Method")).tag(VoiceTarget.doubao)
+                    Text("Typeless").tag(VoiceTarget.typeless)
+                }
+                .settingsRow()
+            }
             Section(L("Connections")) {
                 StatusRow(
                     title: L("Apple TV Remote"),
@@ -352,13 +362,25 @@ private struct VoiceSettingsView: View {
                         ? nil
                         : SystemReadiness.openPacketLoggerDownload
                 )
-                StatusRow(
-                    title: L("Doubao Input Method"),
-                    ready: model.readiness.doubaoInputSourceStatus == .enabled,
-                    detail: doubaoDetail,
-                    actionTitle: doubaoActionTitle,
-                    action: doubaoAction
-                )
+                if model.voiceTarget == .doubao {
+                    StatusRow(
+                        title: L("Doubao Input Method"),
+                        ready: model.readiness.doubaoInputSourceStatus == .enabled,
+                        detail: doubaoDetail,
+                        actionTitle: doubaoActionTitle,
+                        action: doubaoAction
+                    )
+                } else {
+                    StatusRow(
+                        title: "Typeless",
+                        ready: model.readiness.typelessStatus == .running,
+                        detail: typelessDetail,
+                        actionTitle: model.readiness.typelessStatus == .notInstalled
+                            ? L("Download") : nil,
+                        action: model.readiness.typelessStatus == .notInstalled
+                            ? TypelessIntegration.openDownload : nil
+                    )
+                }
             }
         }
         .formStyle(.grouped)
@@ -369,6 +391,14 @@ private struct VoiceSettingsView: View {
         model.readiness.accessibilityGranted
             && model.readiness.hidInputAvailable
             && model.connected
+    }
+
+    private var typelessDetail: String {
+        switch model.readiness.typelessStatus {
+        case .notInstalled: return L("Not Installed")
+        case .notRunning: return L("Not Running")
+        case .running: return L("Running")
+        }
     }
 
     private var remoteConnectionDetail: String {
