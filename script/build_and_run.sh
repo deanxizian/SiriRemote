@@ -84,6 +84,8 @@ if [ -f "$LIVE_INFO" ]; then
 fi
 
 (cd "$ROOT_DIR/SiriRemoteCore" && /usr/bin/swift test)
+/bin/bash "$ROOT_DIR/script/test_button_events.sh"
+/bin/bash "$ROOT_DIR/script/test_voice_coordinator.sh"
 (cd "$ROOT_DIR/app" && ./build.sh)
 /bin/mkdir -p "$STAGE_DIR"
 (

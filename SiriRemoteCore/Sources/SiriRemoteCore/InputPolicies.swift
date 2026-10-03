@@ -1,5 +1,37 @@
 import Foundation
 
+/// NX media events and remote HID values are independent streams. A voice chord must be
+/// intercepted even when its NX down arrives before (or without) the matching HID value.
+/// Once a down is consumed, its repeats and up belong to us too, even after Siri is released.
+public struct MediaKeySuppressionPolicy<Key: Hashable> {
+    private var suppressedKeys: Set<Key> = []
+
+    public init() {}
+
+    public mutating func shouldSuppress(
+        _ key: Key,
+        isDown: Bool,
+        isRepeat: Bool,
+        volumeButton: VoiceVolumeButton?,
+        handleVoiceChord: (VoiceVolumeButton) -> Bool,
+        isDuplicateRemotePress: () -> Bool
+    ) -> Bool {
+        if !isDown { return suppressedKeys.remove(key) != nil }
+        if isRepeat, suppressedKeys.contains(key) { return true }
+
+        // Check the held voice chord first: a last-HID timestamp alone cannot handle NX-first
+        // delivery. Non-volume media keys never enter the voice route.
+        let suppress = volumeButton.map(handleVoiceChord) == true || isDuplicateRemotePress()
+        if suppress { suppressedKeys.insert(key) }
+        else { suppressedKeys.remove(key) }
+        // A fresh non-repeat down re-evaluates ownership, recovering from a lost release without
+        // leaving that volume key permanently disabled.
+        return suppress
+    }
+
+    public mutating func reset() { suppressedKeys.removeAll() }
+}
+
 /// Keeps the two surface switches independent: ordinary touch controls never depend on the
 /// circular-scroll switch, and the outer ring never depends on the ordinary touch switch.
 public struct TouchFeaturePolicy: Equatable, Sendable {

@@ -18,6 +18,7 @@ struct SystemReadinessSnapshot: Equatable {
     let captureServiceStatus: InstalledServiceStatus
     let packetLoggerInstalled: Bool
     let doubaoInputSourceStatus: DoubaoInputSourceStatus
+    let typelessStatus: TypelessStatus
 
     var corePermissionsGranted: Bool { accessibilityGranted }
     var doubaoInputSourceEnabled: Bool { doubaoInputSourceStatus == .enabled }
@@ -68,7 +69,8 @@ enum SystemReadiness {
             driverInstalled: fm.fileExists(atPath: driverPath),
             captureServiceStatus: captureStatus,
             packetLoggerInstalled: fm.isExecutableFile(atPath: packetLoggerPath),
-            doubaoInputSourceStatus: doubaoStatus
+            doubaoInputSourceStatus: doubaoStatus,
+            typelessStatus: TypelessIntegration.status
         )
     }
 

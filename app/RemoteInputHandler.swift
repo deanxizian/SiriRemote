@@ -3,7 +3,7 @@
 //  SiriRemote
 //
 //  A2854-only HID input. HyperVibe's device opening and touch guarding are retained; ordinary
-//  buttons use one fixed product layout while Siri owns the real-time Doubao voice lifecycle.
+//  buttons use one fixed product layout while Siri owns the selected voice tool's lifecycle.
 //
 
 import AppKit
@@ -18,22 +18,21 @@ final class RemoteInputHandler {
     private var acceptingInput = false
     private let mediaController = MediaController()
     private let appSwitcher = AppSwitcherKeyLatch()
-    private var deleteRepeatTimer: DispatchSourceTimer?
-
-    private static let deleteRepeatDelay = DispatchTimeInterval.milliseconds(350)
-    private static let deleteRepeatInterval = DispatchTimeInterval.milliseconds(80)
+    private var fixedButtons = FixedButtonHoldState()
+    private let heldOutput = HeldButtonOutput(post: HeldButtonEmitter.post)
+    private var repeatTimer: DispatchSourceTimer?
 
     var onButtonActivity: (() -> Void)?
     var onPhysicalButtonStateChanged: ((_ rawName: String, _ pressed: Bool) -> Void)?
     var onPhysicalButtonStateReset: (() -> Void)?
     var onSiriButtonEdge: ((_ pressed: Bool) -> Void)?
+    var onSiriButtonCancelled: (() -> Void)?
+    /// True consumes a remote volume press as a voice-mode chord, without changing system volume.
+    var onVoiceVolumeButton: ((VoiceVolumeButton) -> Bool)?
 
     private var initialPressSuppressionDeadline: [String: UInt64] = [:]
     private var suppressedInitialButtons: [String: Set<String>] = [:]
     private static let initialPressSuppressionWindowNanoseconds: UInt64 = 750_000_000
-
-    static var lastProcessedButton: String?
-    static var lastProcessedTime: UInt64 = 0
 
     private static var touchGuardDeadlineNanos: UInt64 = 0
     static var touchGuardDuration: Double = 0.2
@@ -114,9 +113,9 @@ final class RemoteInputHandler {
         for button in released {
             onPhysicalButtonStateChanged?(button, false)
             if button == "siri" {
-                onSiriButtonEdge?(false)
+                onSiriButtonCancelled?()
             } else {
-                routeFixedButton(button, pressed: false)
+                routeFixedButton(button, pressed: false, cancelled: true)
             }
         }
         if devices.isEmpty {
@@ -171,6 +170,9 @@ final class RemoteInputHandler {
         onButtonActivity?()
         let pressed = IOHIDValueGetIntegerValue(value) == 1
         let transition = buttonState.update(source: source, button: button, pressed: pressed)
+        if button == "mute" || button == "playPause" {
+            rmDebug("🎮 HID \(button) value=\(IOHIDValueGetIntegerValue(value)) edge=\(transition)")
+        }
         guard transition != .duplicate else { return }
 
         if pressed, let deadline = initialPressSuppressionDeadline.removeValue(forKey: source),
@@ -198,11 +200,6 @@ final class RemoteInputHandler {
         }
 
         if pressed, Self.onGlassButtons.contains(button) { Self.armTouchGuard() }
-        if pressed {
-            Self.lastProcessedButton = button
-            Self.lastProcessedTime = mach_absolute_time()
-        }
-
         routeFixedButton(button, pressed: pressed)
     }
 
@@ -228,51 +225,111 @@ final class RemoteInputHandler {
 
     // MARK: - Fixed product layout
 
-    private func routeFixedButton(_ button: String, pressed: Bool) {
-        switch button {
-        case "tv":
-            if pressed {
-                if !appSwitcher.begin() { NSSound.beep() }
-            } else {
+    private func routeFixedButton(_ button: String, pressed: Bool, cancelled: Bool = false) {
+        guard let button = FixedRemoteButton(rawValue: button) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let commands: [FixedButtonHoldState.Command]
+        if pressed {
+            // Read at the start of each hold so changes to the macOS Keyboard settings apply on
+            // the next press. The repeat engine preserves one down/up pair for the entire hold.
+            let timing = ButtonRepeatTiming(
+                delay: NSEvent.keyRepeatDelay, interval: NSEvent.keyRepeatInterval
+            )
+            commands = fixedButtons.press(button, at: now, timing: timing)
+        } else {
+            commands = fixedButtons.release(button, at: now, cancelled: cancelled)
+        }
+        for command in commands { perform(command) }
+        scheduleRepeat()
+    }
+
+    private func perform(_ command: FixedButtonHoldState.Command) {
+        switch command {
+        case .activate(let button):
+            activateOnRelease(button)
+        case .beginHold(.tv):
+            stopAppSwitcherNavigationRepeats()
+            if !appSwitcher.begin() { NSSound.beep() }
+        case .beginHold(let button):
+            performHeldButton(button, repeating: false)
+        case .repeatHold(let button):
+            performHeldButton(button, repeating: true)
+        case .endHold(let button):
+            if button == .tv {
                 _ = appSwitcher.end()
+                stopAppSwitcherNavigationRepeats()
+            } else {
+                heldOutput.end(button)
             }
-        case "ringLeft" where appSwitcher.isActive:
-            if pressed { _ = appSwitcher.movePrevious() }
-        case "ringRight" where appSwitcher.isActive:
-            if pressed { _ = appSwitcher.moveNext() }
-        case "power":
-            guard pressed else { return }
+        }
+    }
+
+    private func performHeldButton(_ button: FixedRemoteButton, repeating: Bool) {
+        switch button {
+        case .ringLeft where appSwitcher.isActive:
+            _ = appSwitcher.movePrevious()
+        case .ringRight where appSwitcher.isActive:
+            _ = appSwitcher.moveNext()
+        default:
+            if button == .volumeUp || button == .volumeDown,
+               onVoiceVolumeButton?(button == .volumeUp ? .up : .down) == true {
+                // A chord can also take over an already-held volume button. End that OS hold,
+                // and do not resume its repeats if Siri is released before the volume button.
+                heldOutput.end(button)
+                fixedButtons.consumeUntilRelease(button)
+                return
+            }
+            let posted = repeating ? heldOutput.repeatDown(button) : heldOutput.begin(button)
+            if !posted {
+                heldOutput.end(button)
+                fixedButtons.consumeUntilRelease(button)
+                rmDebug("⌨️ unable to construct held-button event for \(button.rawValue)")
+            }
+        }
+    }
+
+    private func activateOnRelease(_ button: FixedRemoteButton) {
+        switch button {
+        case .power:
             // macOS does not permit third-party software to bypass the lock-screen credential.
             // The public user-facing action is therefore Lock Screen (and, if already locked, the
             // synthetic key activity may wake the authentication UI but never unlocks it).
             _ = appSwitcher.end()
+            stopAppSwitcherNavigationRepeats()
             FixedKeyEmitter.lockScreen()
-        case "menu":
-            if pressed { beginDeleteRepeat() }
-            else { endDeleteRepeat() }
-        case "select":
-            // Physical centre press is always Return. A light surface tap remains a mouse click in
-            // TouchHandler and is governed solely by settings.touchEnabled.
-            if pressed { FixedKeyEmitter.tap(.enter) }
-        case "ringUp":
-            if pressed { FixedKeyEmitter.tap(.up) }
-        case "ringDown":
-            if pressed { FixedKeyEmitter.tap(.down) }
-        case "ringLeft":
-            if pressed { FixedKeyEmitter.tap(.left) }
-        case "ringRight":
-            if pressed { FixedKeyEmitter.tap(.right) }
-        case "playPause":
-            if pressed { mediaController.sendMediaKey(.playPause) }
-        case "mute":
-            if pressed { mediaController.sendMediaKey(.mute) }
-        case "volumeUp":
-            if pressed { mediaController.sendMediaKey(.volumeUp) }
-        case "volumeDown":
-            if pressed { mediaController.sendMediaKey(.volumeDown) }
+        case .select:
+            // A real physical release emits Return once. A light surface tap remains a mouse
+            // click in TouchHandler and is governed solely by settings.touchEnabled.
+            FixedKeyEmitter.tap(.enter)
+        case .playPause:
+            mediaController.sendMediaKey(.playPause)
+        case .mute:
+            mediaController.sendMediaKey(.mute)
         default:
             break
         }
+    }
+
+    private func stopAppSwitcherNavigationRepeats() {
+        // A direction held while choosing an App must not turn into arrow presses in that App
+        // when TV is released. Require a new physical direction press in the new context.
+        fixedButtons.consumeUntilRelease(.ringLeft)
+        fixedButtons.consumeUntilRelease(.ringRight)
+        heldOutput.end(.ringLeft)
+        heldOutput.end(.ringRight)
+    }
+
+    /// Suppress the remote's native media stream for its entire hold, not just the first 300 ms.
+    func shouldSuppressMediaKey(_ key: MediaKeyInterceptor.MediaKeyType) -> Bool {
+        let button: FixedRemoteButton
+        switch key {
+        case .mute: button = .mute
+        case .playPause: button = .playPause
+        case .volumeUp: button = .volumeUp
+        case .volumeDown: button = .volumeDown
+        case .next, .previous: return false
+        }
+        return fixedButtons.suppressesNativeMedia(button, at: ProcessInfo.processInfo.systemUptime)
     }
 
     // MARK: - Teardown
@@ -291,38 +348,45 @@ final class RemoteInputHandler {
     }
 
     private func releaseAllInput() {
-        if buttonState.heldButtons.contains("siri") { onSiriButtonEdge?(false) }
-        endDeleteRepeat()
+        if buttonState.heldButtons.contains("siri") { onSiriButtonCancelled?() }
+        stopRepeating()
+        for command in fixedButtons.reset() { perform(command) }
+        heldOutput.releaseAll()
         _ = appSwitcher.end()
         buttonState.removeAll()
         onPhysicalButtonStateReset?()
     }
 
-    private func beginDeleteRepeat() {
-        endDeleteRepeat()
-        FixedKeyEmitter.tap(.delete)
-
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(
-            deadline: .now() + Self.deleteRepeatDelay,
-            repeating: Self.deleteRepeatInterval,
-            leeway: .milliseconds(8)
-        )
-        timer.setEventHandler { [weak self] in
-            guard let self, self.buttonState.heldButtons.contains("menu") else {
-                self?.endDeleteRepeat()
-                return
-            }
-            FixedKeyEmitter.tap(.delete)
+    private func scheduleRepeat() {
+        guard let deadline = fixedButtons.nextRepeatAt else {
+            stopRepeating()
+            return
         }
-        deleteRepeatTimer = timer
-        timer.resume()
+        let delay = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+        // A disabled key-repeat preference can be represented by an enormous delay. Avoid
+        // overflowing DispatchTime's nanosecond conversion or falling back to a fast repeat.
+        let fireAt: DispatchTime = delay < Double(Int64.max / 1_000_000_000)
+            ? .now() + delay : .distantFuture
+        if let timer = repeatTimer {
+            timer.schedule(deadline: fireAt, leeway: .milliseconds(5))
+        } else {
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: fireAt, leeway: .milliseconds(5))
+            timer.setEventHandler { [weak self] in
+                guard let self, self.acceptingInput else { return }
+                let due = self.fixedButtons.takeRepeats(at: ProcessInfo.processInfo.systemUptime)
+                for command in due { self.perform(command) }
+                self.scheduleRepeat()
+            }
+            repeatTimer = timer
+            timer.resume()
+        }
     }
 
-    private func endDeleteRepeat() {
-        deleteRepeatTimer?.setEventHandler {}
-        deleteRepeatTimer?.cancel()
-        deleteRepeatTimer = nil
+    private func stopRepeating() {
+        repeatTimer?.setEventHandler {}
+        repeatTimer?.cancel()
+        repeatTimer = nil
     }
 }
 

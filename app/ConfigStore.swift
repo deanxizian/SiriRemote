@@ -3,7 +3,7 @@
 //  SiriRemote
 //
 //  Product-level configuration boundary. The fixed button layout is code-owned; only touch and
-//  circular-scroll preferences are persisted.
+//  circular-scroll preferences and voice destination are persisted.
 //
 
 import Foundation
@@ -128,6 +128,7 @@ enum ConfigStore {
     static let defaultTemplate = """
     {
       "settings": {
+        "voiceTarget": "doubao",
         "touchEnabled": true,
         "cursorSpeed": 0.6,
         "cursorDeadzone": 0.006,

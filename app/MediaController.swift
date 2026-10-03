@@ -14,6 +14,7 @@ class MediaController {
 
     func sendMediaKey(_ keyType: MediaKeyInterceptor.MediaKeyType) {
         guard let nxCode = nxKeyCode(for: keyType) else { return }
+        if keyType == .mute || keyType == .playPause { rmDebug("🎛 emit media tap \(keyType)") }
         postSystemDefinedKey(nxKeyCode: nxCode)
     }
 

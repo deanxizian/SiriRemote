@@ -257,7 +257,7 @@ private struct ControlSettingsView: View {
                 LabeledContent(L("Center Button"), value: L("Return")).settingsRow()
                 LabeledContent(
                     L("Back Button"),
-                    value: L("Delete (hold to repeat)")
+                    value: L("Delete")
                 ).settingsRow()
                 LabeledContent(
                     L("Up / Down / Left / Right"),
@@ -265,16 +265,30 @@ private struct ControlSettingsView: View {
                 ).settingsRow()
                 LabeledContent(
                     L("Play/Pause Button"),
-                    value: L("Play or pause media")
+                    value: L("Play / Pause")
                 ).settingsRow()
-                LabeledContent(L("Mute Button"), value: L("Mute or unmute")).settingsRow()
+                LabeledContent(L("Mute Button"), value: L("Mute / Unmute")).settingsRow()
                 LabeledContent(
                     L("Volume Up/Down Buttons"),
-                    value: L("Adjust system volume")
+                    value: L("Adjust Volume")
+                ).settingsRow()
+            }
+            Section(L("Siri Voice Button")) {
+                LabeledContent(L("Single Tap"), value: L("Send Return")).settingsRow()
+                LabeledContent(
+                    L("Double Tap"),
+                    value: L("Switch Doubao / Typeless")
+                ).settingsRow()
+                LabeledContent(L("Hold"), value: L("Voice Input")).settingsRow()
+            }
+            Section(L("Typeless Shortcuts")) {
+                LabeledContent(
+                    L("Siri Voice Button + Volume Up"),
+                    value: L("Translate")
                 ).settingsRow()
                 LabeledContent(
-                    L("Voice Button"),
-                    value: L("Tap to send; hold for voice input")
+                    L("Siri Voice Button + Volume Down"),
+                    value: L("Ask Anything")
                 ).settingsRow()
             }
         }
@@ -333,6 +347,16 @@ private struct VoiceSettingsView: View {
 
     var body: some View {
         Form {
+            Section(L("Voice Input")) {
+                Picker(L("Voice App"), selection: Binding(
+                    get: { model.voiceTarget },
+                    set: { value in model.updateSettings { $0.voiceTarget = value } }
+                )) {
+                    Text(L("Doubao Input Method")).tag(VoiceTarget.doubao)
+                    Text("Typeless").tag(VoiceTarget.typeless)
+                }
+                .settingsRow()
+            }
             Section(L("Connections")) {
                 StatusRow(
                     title: L("Apple TV Remote"),
@@ -352,13 +376,25 @@ private struct VoiceSettingsView: View {
                         ? nil
                         : SystemReadiness.openPacketLoggerDownload
                 )
-                StatusRow(
-                    title: L("Doubao Input Method"),
-                    ready: model.readiness.doubaoInputSourceStatus == .enabled,
-                    detail: doubaoDetail,
-                    actionTitle: doubaoActionTitle,
-                    action: doubaoAction
-                )
+                if model.voiceTarget == .doubao {
+                    StatusRow(
+                        title: L("Doubao Input Method"),
+                        ready: model.readiness.doubaoInputSourceStatus == .enabled,
+                        detail: doubaoDetail,
+                        actionTitle: doubaoActionTitle,
+                        action: doubaoAction
+                    )
+                } else {
+                    StatusRow(
+                        title: "Typeless",
+                        ready: model.readiness.typelessStatus == .running,
+                        detail: typelessDetail,
+                        actionTitle: model.readiness.typelessStatus == .notInstalled
+                            ? L("Download") : nil,
+                        action: model.readiness.typelessStatus == .notInstalled
+                            ? TypelessIntegration.openDownload : nil
+                    )
+                }
             }
         }
         .formStyle(.grouped)
@@ -369,6 +405,14 @@ private struct VoiceSettingsView: View {
         model.readiness.accessibilityGranted
             && model.readiness.hidInputAvailable
             && model.connected
+    }
+
+    private var typelessDetail: String {
+        switch model.readiness.typelessStatus {
+        case .notInstalled: return L("Not Installed")
+        case .notRunning: return L("Not Running")
+        case .running: return L("Running")
+        }
     }
 
     private var remoteConnectionDetail: String {
