@@ -7,6 +7,7 @@ final class MenuBarManager {
                                             keyEquivalent: "")
     private let permissionsItem = NSMenuItem(title: L("Accessibility: Checking…"), action: nil,
                                              keyEquivalent: "")
+    private let voiceTargetItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var connected = false
     private var hidInputAvailable = false
     private var permissionsReady = false
@@ -93,6 +94,11 @@ final class MenuBarManager {
             : L("Accessibility: Authorization Required")
     }
 
+    func updateVoiceTarget(_ target: VoiceTarget) {
+        let name = target == .doubao ? L("Doubao Input Method") : "Typeless"
+        voiceTargetItem.title = L("Voice Input: %@", name)
+    }
+
     private func updateConnectionPresentation() {
         if !hidInputAvailable {
             connectionItem.title = L("Remote: Temporarily Unavailable")
@@ -114,8 +120,10 @@ final class MenuBarManager {
         menu.addItem(.separator())
         connectionItem.isEnabled = false
         permissionsItem.isEnabled = false
+        voiceTargetItem.isEnabled = false
         menu.addItem(connectionItem)
         menu.addItem(permissionsItem)
+        menu.addItem(voiceTargetItem)
         menu.addItem(.separator())
 
         let quit = NSMenuItem(title: L("Quit SiriRemote"), action: #selector(quitApp),

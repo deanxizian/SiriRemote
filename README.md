@@ -7,7 +7,7 @@
 SiriRemote 是一款面向 **Apple TV Siri Remote 第三代（A2854）** 的 macOS 菜单栏应用，
 提供 Mac 触控、固定按键控制，以及遥控器实体麦克风到豆包输入法或 Typeless 的语音输入。
 
-> 从 0.2.x 升级：请将豆包的长按语音快捷键改为 **右 Command**。0.3.0 的 Typeless 模式使用 Fn，避免同时触发两个工具。
+> 从 0.2.x 升级：请将豆包的长按语音快捷键改为 **右 Command**。0.3.0 起的 Typeless 模式使用 Fn，避免同时触发两个工具。
 
 这是非官方社区项目，与 Apple 或字节跳动无隶属关系。触控和遥控器语音依赖未公开的
 macOS/蓝牙接口，升级系统前请保留可用安装包和卸载包。
@@ -64,15 +64,15 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 三个文件：
 
 ```text
-SiriRemote-0.3.0-Full-Setup.pkg
-SiriRemote-0.3.0-Complete-Uninstall.pkg
-SiriRemote-0.3.0-SHA256SUMS.txt
+SiriRemote-0.3.1-Full-Setup.pkg
+SiriRemote-0.3.1-Complete-Uninstall.pkg
+SiriRemote-0.3.1-SHA256SUMS.txt
 ```
 
 先在下载目录核对校验和：
 
 ```sh
-shasum -a 256 -c SiriRemote-0.3.0-SHA256SUMS.txt
+shasum -a 256 -c SiriRemote-0.3.1-SHA256SUMS.txt
 ```
 
 两个 PKG 均显示 `OK` 后再安装 Full Setup。PKG 使用
@@ -172,7 +172,7 @@ SiriRemote 在音频就绪后点按对应的启动快捷键，排空尾音后统
 | 按住至少 300 ms | 开始按住说话；松开后结束录音 |
 
 双击需在第一次松开后的 300 ms 内再次按下，且两次按住都不足 300 ms。若第二次按住达到录音门槛，则按长按录音处理，不切换、不发送回车。
-切换会保存到“语音”页，菜单栏保持不变；不会立即切换 macOS 输入法或抢走输入焦点。只要求另一工具已就绪（豆包已启用 / Typeless 正在运行），当前工具不可用也能切走。目标不可用或上一段录音还在结束时，保持原选择并发出提示音。
+切换会保存到“语音”页，菜单中的“语音输入”一行同步显示当前选择，不弹出额外提示；不会立即切换 macOS 输入法或抢走输入焦点。只要求另一工具已就绪（豆包已启用 / Typeless 正在运行），当前工具不可用也能切走。目标不可用或上一段录音还在结束时，保持原选择并发出提示音。
 
 按下时会预热采集；按住达到 300 ms 且语音工具与音频就绪后才发送对应语音快捷键，短按不会打开语音。
 1.5 秒内未准备好时会安全中止并释放已按下的键。
@@ -285,7 +285,7 @@ pgrep -fl 'SiriRemote|packetlogger|SiriRemoteAudioRouter|SiriRemoteCapture'
 双击：
 
 ```text
-SiriRemote-0.3.0-Complete-Uninstall.pkg
+SiriRemote-0.3.1-Complete-Uninstall.pkg
 ```
 
 卸载包会删除 SiriRemote App、HAL 驱动、Capture 服务、LaunchDaemon、当前控制台用户的
@@ -300,16 +300,16 @@ SiriRemote-0.3.0-Complete-Uninstall.pkg
 ### 完整本地安装包
 
 ```sh
-dist/build-release.sh 0.3.0
+dist/build-release.sh 0.3.1
 ```
 
 该命令会运行 Core、实际语音协调器及按键编码回归，构建 App、路由器、HAL 和 Capture 服务，完成签名、打包与
 内容审计。输出位于 `dist/out/`：
 
 ```text
-SiriRemote-0.3.0-Full-Setup.pkg
-SiriRemote-0.3.0-Complete-Uninstall.pkg
-SiriRemote-0.3.0-SHA256SUMS.txt
+SiriRemote-0.3.1-Full-Setup.pkg
+SiriRemote-0.3.1-Complete-Uninstall.pkg
+SiriRemote-0.3.1-SHA256SUMS.txt
 ```
 
 ### 本机开发验证

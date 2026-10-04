@@ -106,6 +106,7 @@ private let chineseStrings: [String: String] = [
     "Accessibility: Authorization Required": "辅助功能：需要授权",
     "Remote: Temporarily Unavailable": "遥控器：暂不可用",
     "Remote: Connected ✓": "遥控器：已连接 ✓",
+    "Voice Input: %@": "语音输入：%@",
     "Open SiriRemote": "打开 SiriRemote",
     "Quit SiriRemote": "退出 SiriRemote",
 
