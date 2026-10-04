@@ -19,9 +19,13 @@ WATCH_STREAK=3
 WATCH_WARMUP_SECONDS=3
 WATCH_SECONDS=8
 SCRIPT_DIR="$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && pwd)"
+source "$SCRIPT_DIR/capture-service.sh"
+APP_ONLY=0
+[ ! -f "$SCRIPT_DIR/app-only" ] || APP_ONLY=1
 WATCHDOG="$SCRIPT_DIR/SiriRemoteCoreAudioWatchdog"
 PROCESS_VERIFIER="$SCRIPT_DIR/SiriRemoteProcessVerifier"
-CAPTURE="$SUPPORT/SiriRemoteCapture"
+CAPTURE="$APP/Contents/Library/LaunchServices/SiriRemoteCapture"
+LEGACY_CAPTURE="$SUPPORT/SiriRemoteCapture"
 ROUTER="$SUPPORT/SiriRemoteAudioRouter"
 LEGAL="$SUPPORT/Legal"
 EXPECTED_TEAM="96M7FW2XLU"
@@ -94,10 +98,10 @@ verify_expected_signature() {
     identifier="$2"
     /usr/bin/codesign --verify --strict "$target" || return 1
     details="$(/usr/bin/codesign -d --verbose=4 "$target" 2>&1)" || return 1
-    echo "$details" | /usr/bin/grep -Fq "Identifier=$identifier" || return 1
-    echo "$details" | /usr/bin/grep -Fq "TeamIdentifier=$EXPECTED_TEAM" || return 1
-    echo "$details" | /usr/bin/grep -Fq "Authority=$EXPECTED_AUTHORITY" || return 1
-    if echo "$details" | /usr/bin/grep -Eq 'Signature=adhoc|flags=.*adhoc'; then
+    /usr/bin/grep -Fxq "Identifier=$identifier" <<< "$details" || return 1
+    /usr/bin/grep -Fxq "TeamIdentifier=$EXPECTED_TEAM" <<< "$details" || return 1
+    /usr/bin/grep -Fxq "Authority=$EXPECTED_AUTHORITY" <<< "$details" || return 1
+    if /usr/bin/grep -Eq 'Signature=adhoc|flags=.*adhoc' <<< "$details"; then
         echo "Refusing ad-hoc-signed component: $target" >&2
         return 1
     fi
@@ -125,7 +129,7 @@ verify_launchdaemon() {
     [ "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$PLIST" 2>/dev/null)" \
         = com.deanxi.siriremote.capture ] || return 1
     [ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$PLIST" 2>/dev/null)" \
-        = "$CAPTURE" ] || return 1
+        = "$LEGACY_CAPTURE" ] || return 1
     [ "$(/usr/bin/plutil -extract ProgramArguments raw -o - "$PLIST" 2>/dev/null)" = 1 ] \
         || return 1
     [ "$(/usr/libexec/PlistBuddy -c 'Print :RunAtLoad' "$PLIST" 2>/dev/null)" = true ] \
@@ -150,6 +154,9 @@ validate_restored_components() {
     if [ -f "$BACKUP/had-app" ]; then
         verify_secure_root_item "$APP" directory \
             && verify_expected_signature "$APP" com.deanxi.siriremote || return 1
+        if [ -f "$SR_CAPTURE_PLIST" ]; then
+            verify_expected_signature "$CAPTURE" SiriRemoteCapture || return 1
+        fi
     fi
     if [ -f "$BACKUP/had-driver" ]; then
         verify_secure_root_item "$DRIVER" directory \
@@ -157,14 +164,26 @@ validate_restored_components() {
     fi
     if [ -f "$BACKUP/had-support" ]; then
         verify_secure_root_item "$SUPPORT" directory \
-            && verify_secure_root_item "$CAPTURE" file \
             && verify_secure_root_item "$ROUTER" file \
-            && verify_expected_signature "$CAPTURE" SiriRemoteCapture \
             && verify_expected_signature "$ROUTER" SiriRemoteAudioRouter || return 1
     fi
     if [ -f "$BACKUP/had-launchdaemon" ]; then
-        [ -f "$BACKUP/had-support" ] && verify_launchdaemon || return 1
+        [ -f "$BACKUP/had-support" ] && verify_launchdaemon \
+            && verify_secure_root_item "$LEGACY_CAPTURE" file \
+            && verify_expected_signature "$LEGACY_CAPTURE" SiriRemoteCapture || return 1
     fi
+}
+
+bootstrap_capture() {
+    # BTM can briefly reject a legacy job while updating its existing attribution record.
+    # Bound retries; do not reset the system-wide database or change the user's enabled state.
+    for attempt in 1 2 3 4 5; do
+        if /bin/launchctl bootstrap system "$PLIST"; then
+            return 0
+        fi
+        [ "$attempt" -eq 5 ] || /usr/bin/perl -e 'select(undef, undef, undef, 1)'
+    done
+    return 1
 }
 
 restore_previous() {
@@ -172,8 +191,18 @@ restore_previous() {
     # A failed live-process check can mean a duplicate or wrong-path process survived. Stop every
     # UI instance before replacing bundles, then prove the restored App has exactly one owner.
     stop_siriremote_processes || true
-    /bin/launchctl bootout system "$PLIST" 2>/dev/null || true
-    /bin/rm -rf "$APP" "$DRIVER" "$SUPPORT"
+    # Refuse to delete a bundle whose service could not be unregistered. Leave the protected
+    # rollback copy for recovery instead of creating a dangling privileged registration.
+    stop_operation=--prepare-capture-update
+    if [ -f "$BACKUP/had-launchdaemon" ] || [ ! -f "$BACKUP/had-app" ]; then
+        stop_operation=--unregister-capture
+    fi
+    if ! capture_stop "$stop_operation"; then
+        echo "Warning: Capture could not be stopped; rollback files retained at $BACKUP" >&2
+        return 1
+    fi
+    /bin/rm -rf "$APP" "$SUPPORT"
+    [ "$APP_ONLY" -eq 1 ] || /bin/rm -rf "$DRIVER"
     /bin/rm -f "$PLIST"
     # Runtime state belongs to the attempted installation, not to the durable product data.
     # A restored capture daemon recreates this directory with the correct ownership on demand.
@@ -188,7 +217,7 @@ restore_previous() {
     [ ! -f "$BACKUP/had-app" ] || /bin/chmod -RN "$APP" 2>/dev/null || true
     [ ! -f "$BACKUP/had-driver" ] || /bin/chmod -RN "$DRIVER" 2>/dev/null || true
     if [ -f "$BACKUP/had-support" ]; then
-        /bin/chmod -N "$SUPPORT" "$CAPTURE" "$ROUTER" 2>/dev/null || true
+        /bin/chmod -N "$SUPPORT" "$LEGACY_CAPTURE" "$ROUTER" 2>/dev/null || true
     fi
     [ ! -f "$BACKUP/had-launchdaemon" ] || /bin/chmod -N "$PLIST" 2>/dev/null || true
 
@@ -198,13 +227,19 @@ restore_previous() {
     if ! validate_restored_components; then
         restored_components_valid=0
         echo "Warning: refusing to activate an invalid SiriRemote rollback" >&2
-        /bin/rm -rf "$APP" "$DRIVER" "$SUPPORT"
+        /bin/rm -rf "$APP" "$SUPPORT"
+        [ "$APP_ONLY" -eq 1 ] || /bin/rm -rf "$DRIVER"
         /bin/rm -f "$PLIST"
     fi
-    restart_coreaudio || true
+    [ "$APP_ONLY" -eq 1 ] || restart_coreaudio || true
+    restored_service_valid=1
     if [ "$restored_components_valid" -eq 1 ] && [ -f "$BACKUP/had-launchdaemon" ]; then
-        /bin/launchctl bootstrap system "$PLIST" 2>/dev/null || true
+        bootstrap_capture || restored_service_valid=0
+    elif [ "$restored_components_valid" -eq 1 ] && [ -f "$SR_CAPTURE_PLIST" ]; then
+        capture_start || restored_service_valid=0
     fi
+    # A service restart failure must retain recovery data, but must not prevent the verified UI
+    # from reopening so the user can see the unavailable service or approval guidance.
     restored_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
     if [ "$restored_components_valid" -eq 1 ] \
         && [ -f "$BACKUP/had-app" ] && [ "$restored_uid" -gt 0 ]; then
@@ -216,8 +251,10 @@ restore_previous() {
             echo "Warning: the previous SiriRemote App was restored but could not be relaunched" >&2
             # Never leave a duplicate, wrong-UID or wrong-path input process alive after rollback.
             stop_siriremote_processes || true
+            return 1
         fi
     fi
+    [ "$restored_components_valid" -eq 1 ] && [ "$restored_service_valid" -eq 1 ]
 }
 
 verify_single_live_app() {
@@ -239,7 +276,7 @@ verify_single_live_app() {
 
 load_backup_state
 
-trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; cleanup_install_state; exit "$code"' \
+trap 'code=$?; trap - ERR INT TERM HUP; if restore_previous; then cleanup_install_state; fi; exit "$code"' \
     ERR INT TERM HUP
 
 [ -d "$APP" ] || {
@@ -250,7 +287,7 @@ trap 'code=$?; trap - ERR INT TERM HUP; restore_previous; cleanup_install_state;
     echo "SiriRemote audio driver is missing from its fixed path: $DRIVER" >&2
     false
 }
-[ -x "$WATCHDOG" ] || {
+[ "$APP_ONLY" -eq 1 ] || [ -x "$WATCHDOG" ] || {
     echo "SiriRemote CoreAudio watchdog is missing from the installer" >&2
     false
 }
@@ -267,27 +304,28 @@ console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
 # Do not recursively mutate SUPPORT: the Capture service may already have placed an Apple-signed,
 # root-owned PacketLogger snapshot there. PackageKit's script sandbox correctly refuses to rewrite
 # some Apple security labels. Limit ownership/ACL repair to SiriRemote's own payload paths.
-/usr/sbin/chown root:wheel "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER" "$PLIST"
-/usr/sbin/chown -R root:wheel "$DRIVER" "$LEGAL"
-/bin/chmod -N "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$CAPTURE" "$ROUTER" "$PLIST"
-/bin/chmod -RN "$DRIVER" "$LEGAL"
+/usr/sbin/chown root:wheel "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$ROUTER"
+/bin/chmod -N "$SUPPORT" "$LOG_DIR" "$RUNTIME_DIR" "$ROUTER"
+if [ "$APP_ONLY" -eq 0 ]; then
+    /usr/sbin/chown -R root:wheel "$DRIVER" "$LEGAL"
+    /bin/chmod -RN "$DRIVER" "$LEGAL"
+fi
 /bin/chmod 755 "$SUPPORT"
 /bin/chmod 700 "$RUNTIME_DIR"
-/bin/chmod 755 "$CAPTURE" "$ROUTER"
-/bin/chmod 644 "$PLIST"
+/bin/chmod 755 "$ROUTER"
 
 verify_expected_signature "$APP" com.deanxi.siriremote
 verify_expected_signature "$DRIVER" com.deanxi.siriremote.audio.driver
 verify_expected_signature "$CAPTURE" SiriRemoteCapture
 verify_expected_signature "$ROUTER" SiriRemoteAudioRouter
-verify_expected_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog
+[ "$APP_ONLY" -eq 1 ] || verify_expected_signature "$WATCHDOG" SiriRemoteCoreAudioWatchdog
 verify_expected_signature "$PROCESS_VERIFIER" SiriRemoteProcessVerifier
-verify_launchdaemon
-# New activation requires authenticated IPC. Rollback may restore the previous version,
-# which legitimately had no MachServices key, so this check is separate from rollback validation.
-[ "$(/usr/bin/plutil -extract MachServices raw -o - "$PLIST")" = com.deanxi.siriremote.capture ]
-[ "$(/usr/libexec/PlistBuddy -c 'Print :MachServices:com.deanxi.siriremote.capture' "$PLIST")" = true ]
+[ "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$SR_CAPTURE_PLIST")" \
+    = Contents/Library/LaunchServices/SiriRemoteCapture ]
+[ "$(/usr/bin/plutil -extract MachServices raw -o - "$SR_CAPTURE_PLIST")" = com.deanxi.siriremote.capture ]
+[ "$(/usr/libexec/PlistBuddy -c 'Print :MachServices:com.deanxi.siriremote.capture' "$SR_CAPTURE_PLIST")" = true ]
 
+if [ "$APP_ONLY" -eq 0 ]; then
 restart_coreaudio
 /usr/bin/perl -e 'select(undef, undef, undef, 2)'
 
@@ -298,22 +336,20 @@ done
 
 echo "→ checking CoreAudio with bounded native watchdog for ${WATCH_SECONDS}s"
 "$WATCHDOG" "$WATCH_SECONDS" "$WATCH_THRESHOLD" "$WATCH_STREAK"
+fi
 
-/bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+# Resolve the owning App before launchd registers its associated background item. Register only
+# this bundle, as the console user, without launching it or resetting other apps' registrations.
+lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+if ! /bin/launchctl asuser "$console_uid" /usr/bin/sudo -H -u "#$console_uid" -- \
+    "$lsregister" -f "$APP"; then
+    # Attribution is cosmetic: a LaunchServices failure must not roll back a working audio install.
+    echo "Warning: SiriRemote background-item attribution may update after the App next opens" >&2
+fi
+
 /bin/rm -f "$RUNTIME_DIR/capture-service-ready"
-/bin/launchctl bootstrap system "$PLIST"
-capture_service_ready=0
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
-    if [ -f "$RUNTIME_DIR/capture-service-ready" ]; then
-        capture_service_ready=1
-        break
-    fi
-    /usr/bin/perl -e 'select(undef, undef, undef, 0.5)'
-done
-[ "$capture_service_ready" -eq 1 ] || {
-    echo "SiriRemote Capture service did not start" >&2
-    false
-}
+capture_remove_legacy
+capture_start
 stop_siriremote_processes
 /bin/launchctl asuser "$console_uid" /usr/bin/open -n "$APP" --args --settings
 verify_single_live_app "$console_uid"

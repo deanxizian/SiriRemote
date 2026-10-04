@@ -3,7 +3,7 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 
 ROOT="$PWD"
-VERSION="${1:-0.3.1}"
+VERSION="${1:-0.3.2}"
 OUTPUT_NAME="${SIRIREMOTE_PACKAGE_OUTPUT_NAME:-out}"
 [[ "$OUTPUT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || exit 2
 FULL_PKG="$ROOT/dist/$OUTPUT_NAME/SiriRemote-$VERSION-Full-Setup.pkg"
@@ -31,9 +31,9 @@ PAYLOAD="$AUDIT_DIR/full/Payload"
 APP="$PAYLOAD/Applications/SiriRemote.app"
 DRIVER="$PAYLOAD/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver"
 SUPPORT="$PAYLOAD/Library/Application Support/SiriRemote"
-CAPTURE="$SUPPORT/SiriRemoteCapture"
+CAPTURE="$APP/Contents/Library/LaunchServices/SiriRemoteCapture"
 ROUTER="$SUPPORT/SiriRemoteAudioRouter"
-LAUNCHD="$PAYLOAD/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
+LAUNCHD="$APP/Contents/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
 PACKAGE_INFO="$AUDIT_DIR/full/PackageInfo"
 WATCHDOG="$AUDIT_DIR/full/Scripts/SiriRemoteCoreAudioWatchdog"
 PROCESS_VERIFIER="$AUDIT_DIR/full/Scripts/SiriRemoteProcessVerifier"
@@ -44,10 +44,16 @@ for required in "$APP" "$DRIVER" "$CAPTURE" "$ROUTER" "$LAUNCHD" \
     "$EN_INFO_STRINGS" "$ZH_INFO_STRINGS" \
     "$AUDIT_DIR/full/Scripts/preinstall" "$AUDIT_DIR/full/Scripts/postinstall" "$WATCHDOG" \
     "$PROCESS_VERIFIER" \
+    "$AUDIT_DIR/full/Scripts/capture-service.sh" \
+    "$AUDIT_DIR/uninstall/Scripts/capture-service.sh" \
     "$AUDIT_DIR/uninstall/Scripts/postinstall" \
     "$AUDIT_DIR/uninstall/Scripts/SiriRemoteShmCleanup"; do
     [ -e "$required" ] || { echo "package is missing $required" >&2; exit 1; }
 done
+[ ! -e "$PAYLOAD/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist" ]
+[ ! -e "$SUPPORT/SiriRemoteCapture" ]
+/usr/bin/cmp "$ROOT/dist/capture-service.sh" "$AUDIT_DIR/full/Scripts/capture-service.sh"
+/usr/bin/cmp "$ROOT/dist/capture-service.sh" "$AUDIT_DIR/uninstall/Scripts/capture-service.sh"
 
 /usr/bin/plutil -lint "$EN_INFO_STRINGS" "$ZH_INFO_STRINGS" >/dev/null
 
@@ -126,7 +132,7 @@ assert_signature() {
     target="$1"
     identifier="$2"
     runtime="$3"
-    /usr/bin/codesign --verify --strict --verbose=2 "$target"
+    /usr/bin/codesign --verify --deep --strict --verbose=2 "$target"
     details="$(/usr/bin/codesign -d --verbose=4 "$target" 2>&1)"
     echo "$details" | /usr/bin/grep -Fq "Identifier=$identifier"
     echo "$details" | /usr/bin/grep -Fq "TeamIdentifier=$EXPECTED_TEAM"
@@ -198,8 +204,9 @@ esac
     = com.deanxi.siriremote.audio.driver ]
 [ "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$LAUNCHD")" \
     = com.deanxi.siriremote.capture ]
-[ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$LAUNCHD")" \
-    = "/Library/Application Support/SiriRemote/SiriRemoteCapture" ]
+[ "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$LAUNCHD")" \
+    = Contents/Library/LaunchServices/SiriRemoteCapture ]
+! /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' "$LAUNCHD" >/dev/null 2>&1
 [ "$(/usr/bin/plutil -extract MachServices raw -o - "$LAUNCHD")" = com.deanxi.siriremote.capture ]
 [ "$(/usr/libexec/PlistBuddy -c 'Print :MachServices:com.deanxi.siriremote.capture' "$LAUNCHD")" = true ]
 

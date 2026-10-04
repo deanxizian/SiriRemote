@@ -1,5 +1,10 @@
 import AppKit
 
+if let argument = CommandLine.arguments.dropFirst().first,
+   let result = CaptureService.runCommand(argument) {
+    exit(result)
+}
+
 if CommandLine.arguments.contains("--verify-capture") {
     let ready = srm_capture_check_service() == 0
     print(ready ? "SIRIREMOTE_CAPTURE_AUTH_OK" : "SIRIREMOTE_CAPTURE_AUTH_FAILED")

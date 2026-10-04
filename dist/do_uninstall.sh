@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "SiriRemote uninstaller must run as root" >&2; exit 1; }
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+source "$script_dir/capture-service.sh"
 
 APP="/Applications/SiriRemote.app"
 DRIVER="/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver"
@@ -16,7 +18,7 @@ DEBUG_BACKUP="$SUPPORT/preinstall-HCITraces.plist"
 DEBUG_ABSENT="$SUPPORT/preinstall-HCITraces.absent"
 
 /usr/bin/killall SiriRemote 2>/dev/null || true
-/bin/launchctl bootout system "$PLIST" 2>/dev/null || true
+capture_stop --unregister-capture
 
 if [ -f "$DEBUG_BACKUP" ]; then
     /usr/bin/defaults delete "$DEBUG_DOMAIN" HCITraces 2>/dev/null || true
@@ -47,7 +49,6 @@ if [ -n "$console_user" ] && [ "$console_user" != "root" ] && [ "$console_user" 
     fi
 fi
 
-script_dir="$(cd "$(dirname "$0")" && pwd)"
 [ ! -x "$script_dir/SiriRemoteShmCleanup" ] || "$script_dir/SiriRemoteShmCleanup" || true
 /usr/bin/killall coreaudiod 2>/dev/null || true
 /usr/bin/killall -30 bluetoothd 2>/dev/null || true

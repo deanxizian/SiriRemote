@@ -4,6 +4,10 @@ set -Eeuo pipefail
 [ "$(id -u)" -eq 0 ] || { echo "SiriRemote preinstall must run as root" >&2; exit 1; }
 
 umask 077
+SCRIPT_DIR="$(CDPATH= cd -- "$(/usr/bin/dirname -- "$0")" && pwd)"
+source "$SCRIPT_DIR/capture-service.sh"
+APP_ONLY=0
+[ ! -f "$SCRIPT_DIR/app-only" ] || APP_ONLY=1
 
 INSTALL_STATE="/private/var/run/com.deanxi.siriremote-installer"
 BACKUP_MARKER="$INSTALL_STATE/active-backup"
@@ -55,9 +59,6 @@ BACKUP="$(/usr/bin/mktemp -d "$INSTALL_STATE/backup.XXXXXX")"
 /bin/chmod -N "$BACKUP_MARKER"
 /bin/chmod 600 "$BACKUP_MARKER"
 
-/usr/bin/killall SiriRemote 2>/dev/null || true
-/bin/launchctl bootout system "$PLIST" 2>/dev/null || true
-
 backup_item() {
     source="$1"
     name="$2"
@@ -68,13 +69,13 @@ backup_item() {
 }
 
 backup_item "$APP" app
-backup_item "$DRIVER" driver
+[ "$APP_ONLY" -eq 1 ] || backup_item "$DRIVER" driver
 backup_item "$SUPPORT" support
 backup_item "$PLIST" launchdaemon
 
 # Save the exact pre-SiriRemote HCITraces value once. Upgrades preserve this original snapshot.
 /bin/mkdir -p "$SUPPORT"
-if [ ! -f "$SUPPORT/preinstall-HCITraces.plist" ] \
+if [ "$APP_ONLY" -eq 0 ] && [ ! -f "$SUPPORT/preinstall-HCITraces.plist" ] \
     && [ ! -f "$SUPPORT/preinstall-HCITraces.absent" ]; then
     if /usr/bin/defaults read "$DEBUG_DOMAIN" HCITraces >/dev/null 2>&1; then
         [ -f "$DEBUG_PLIST" ] || {
@@ -87,5 +88,18 @@ if [ ! -f "$SUPPORT/preinstall-HCITraces.plist" ] \
         /usr/bin/touch "$SUPPORT/preinstall-HCITraces.absent"
     fi
 fi
+
+# All fallible preparation precedes service shutdown. If shutdown itself fails, keep the original
+# files and protected backup; never delete a daemon that is still using them.
+/usr/bin/killall SiriRemote 2>/dev/null || true
+if ! capture_stop; then
+    console_uid="$(/usr/bin/stat -f %u /dev/console 2>/dev/null || echo 0)"
+    if [ "$console_uid" -gt 0 ] && capture_verify_app; then
+        /bin/launchctl asuser "$console_uid" /usr/bin/open "$APP" --args --settings || true
+    fi
+    exit 1
+fi
+# Removal is deferred to postinstall, after verifying the new signed bundle. Keeping the old files
+# until then also leaves a bootable legacy service if PackageKit fails before running postinstall.
 
 exit 0

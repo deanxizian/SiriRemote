@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 export COPYFILE_DISABLE=1
 
 ROOT="$PWD"
-VERSION="${1:-0.3.1}"
+VERSION="${1:-0.3.2}"
 APP_SOURCE="${SIRIREMOTE_APP_PATH:-$ROOT/app/SiriRemote.app}"
 OUTPUT_NAME="${SIRIREMOTE_PACKAGE_OUTPUT_NAME:-out}"
 [[ "$OUTPUT_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] || exit 2
@@ -45,8 +45,8 @@ need() { [ -e "$1" ] || { echo "missing build artifact: $1" >&2; exit 1; }; }
 need "$APP_SOURCE"
 need "$ROOT/mic/driver/SiriRemoteAudio.driver"
 need "$ROOT/mic/router/SiriRemoteAudioRouter"
-need "$ROOT/mic/captured/SiriRemoteCapture"
-need "$ROOT/mic/captured/com.deanxi.siriremote.capture.plist"
+need "$APP_SOURCE/Contents/Library/LaunchServices/SiriRemoteCapture"
+need "$APP_SOURCE/Contents/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
 /usr/bin/security find-identity -v -p basic \
     | /usr/bin/grep -Fq "\"$INSTALLER_SIGN_IDENTITY\"" || {
     echo "required Installer signing identity is unavailable: $INSTALLER_SIGN_IDENTITY" >&2
@@ -57,7 +57,6 @@ need "$ROOT/mic/captured/com.deanxi.siriremote.capture.plist"
 /bin/mkdir -p "$FULL_ROOT/Applications" \
     "$FULL_ROOT/Library/Audio/Plug-Ins/HAL" \
     "$FULL_ROOT/Library/Application Support/SiriRemote/Legal" \
-    "$FULL_ROOT/Library/LaunchDaemons" \
     "$FULL_ROOT/Library/Logs/SiriRemote" \
     "$FULL_SCRIPTS" "$UNINSTALL_SCRIPTS" "$OUT"
 
@@ -66,10 +65,6 @@ need "$ROOT/mic/captured/com.deanxi.siriremote.capture.plist"
     "$FULL_ROOT/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver"
 /bin/cp "$ROOT/mic/router/SiriRemoteAudioRouter" \
     "$FULL_ROOT/Library/Application Support/SiriRemote/SiriRemoteAudioRouter"
-/bin/cp "$ROOT/mic/captured/SiriRemoteCapture" \
-    "$FULL_ROOT/Library/Application Support/SiriRemote/SiriRemoteCapture"
-/bin/cp "$ROOT/mic/captured/com.deanxi.siriremote.capture.plist" \
-    "$FULL_ROOT/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
 /bin/cp "$ROOT/LICENSE" "$FULL_ROOT/Library/Application Support/SiriRemote/Legal/GPL-3.0.txt"
 /bin/cp "$ROOT/NOTICE" "$FULL_ROOT/Library/Application Support/SiriRemote/Legal/NOTICE.txt"
 /bin/cp "$ROOT/SOURCE_PROVENANCE.md" \
@@ -110,6 +105,8 @@ done
 /bin/cp "$ROOT/dist/pkg/preinstall" "$FULL_SCRIPTS/preinstall"
 /bin/cp "$ROOT/dist/pkg/postinstall" "$FULL_SCRIPTS/postinstall"
 /bin/cp "$ROOT/dist/do_uninstall.sh" "$UNINSTALL_SCRIPTS/postinstall"
+/bin/cp "$ROOT/dist/capture-service.sh" "$FULL_SCRIPTS/capture-service.sh"
+/bin/cp "$ROOT/dist/capture-service.sh" "$UNINSTALL_SCRIPTS/capture-service.sh"
 xcrun clang -O2 -Wall -Wextra -Werror \
     -mmacosx-version-min="$MACOS_MIN" "$ROOT/dist/coreaudio_watchdog.c" \
     -o "$FULL_SCRIPTS/SiriRemoteCoreAudioWatchdog"

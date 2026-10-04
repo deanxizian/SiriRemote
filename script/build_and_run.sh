@@ -32,7 +32,7 @@ signature_info() {
 
 verify_local_bundle() {
     bundle="$1"
-    /usr/bin/codesign --verify --strict --verbose=2 "$bundle"
+    /usr/bin/codesign --verify --deep --strict --verbose=2 "$bundle"
     info="$(signature_info "$bundle")"
     echo "$info" | /usr/bin/grep -Fq "Identifier=$BUNDLE_ID"
     echo "$info" | /usr/bin/grep -Fq "Authority=$STABLE_SIGN_IDENTITY"
@@ -86,7 +86,10 @@ fi
 (cd "$ROOT_DIR/SiriRemoteCore" && /usr/bin/swift test)
 /bin/bash "$ROOT_DIR/script/test_button_events.sh"
 /bin/bash "$ROOT_DIR/script/test_voice_coordinator.sh"
+/bin/bash "$ROOT_DIR/script/test_capture_bootstrap.sh"
+/bin/bash "$ROOT_DIR/script/test_capture_service.sh"
 (cd "$ROOT_DIR/app" && ./build.sh)
+(cd "$ROOT_DIR/mic/captured" && ./build.sh)
 /bin/mkdir -p "$STAGE_DIR"
 (
     cd "$ROOT_DIR/app"
@@ -100,15 +103,14 @@ verify_local_bundle "$STAGE_APP"
 
 # A Full Setup install owns /Applications/SiriRemote.app as root and macOS App Management blocks a
 # direct user-space rename even for an admin account. Install the already verified App through a
-# one-component package so Authorization Services and Installer perform the replacement atomically.
-# The old process remains alive unless and until installation succeeds.
+# one-component package. Reuse Full Setup's protected rollback and Capture migration, with an
+# app-only marker: neither the HAL nor coreaudiod is touched for a local App/Capture update.
 INSTALL_WORK="$(/usr/bin/mktemp -d /private/tmp/siriremote-install.XXXXXX)"
 INSTALL_PKG="$INSTALL_WORK/SiriRemote.pkg"
 PROCESS_VERIFIER="$INSTALL_WORK/SiriRemoteProcessVerifier"
 
 cleanup_install_work() {
-    /bin/rm -f "$INSTALL_PKG" "$PROCESS_VERIFIER" >/dev/null 2>&1 || true
-    /bin/rmdir "$INSTALL_WORK" >/dev/null 2>&1 || true
+    /bin/rm -rf "$INSTALL_WORK" >/dev/null 2>&1 || true
 }
 trap cleanup_install_work EXIT INT TERM HUP
 
@@ -121,6 +123,13 @@ verifier_info="$(signature_info "$PROCESS_VERIFIER")"
 echo "$verifier_info" | /usr/bin/grep -Fq 'Identifier=SiriRemoteProcessVerifier'
 echo "$verifier_info" | /usr/bin/grep -Fq "Authority=$STABLE_SIGN_IDENTITY"
 
+INSTALL_SCRIPTS="$INSTALL_WORK/scripts"
+/bin/mkdir "$INSTALL_SCRIPTS"
+/bin/cp "$ROOT_DIR/dist/pkg/preinstall" "$ROOT_DIR/dist/pkg/postinstall" \
+    "$ROOT_DIR/dist/capture-service.sh" "$PROCESS_VERIFIER" "$INSTALL_SCRIPTS/"
+/usr/bin/touch "$INSTALL_SCRIPTS/app-only"
+/bin/chmod 755 "$INSTALL_SCRIPTS/preinstall" "$INSTALL_SCRIPTS/postinstall"
+
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
     "$STAGE_APP/Contents/Info.plist")"
 app_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
@@ -129,6 +138,7 @@ COPYFILE_DISABLE=1 /usr/bin/pkgbuild \
     --component "$STAGE_APP" \
     --install-location /Applications \
     --identifier "$BUNDLE_ID.local-update" \
+    --scripts "$INSTALL_SCRIPTS" \
     --version "$app_version.$app_build" \
     "$INSTALL_PKG" >/dev/null
 
@@ -140,6 +150,14 @@ else
         "do shell script \"/usr/sbin/installer -pkg $INSTALL_PKG -target /\" with administrator privileges"
 fi
 verify_local_bundle "$LIVE_APP"
+
+# postinstall has verified and relaunched the installed App. Keep that single UI process in the
+# ordinary handoff; debug/log modes below still need their own foreground launch.
+if [ "$MODE" = run ] || [ "$MODE" = --verify ] || [ "$MODE" = verify ]; then
+    verify_single_live_process
+    echo "✓ installed and launched $LIVE_APP"
+    exit 0
+fi
 
 # Restart only after Installer has committed and the installed signature has been verified.
 /usr/bin/pkill -x "$APP_NAME" >/dev/null 2>&1 || true

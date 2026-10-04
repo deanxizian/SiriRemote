@@ -12,6 +12,7 @@ SWIFT_FILES=(
     "ApplicationMenu.swift"
     "SiriRemoteApp.swift"
     "LaunchAtLogin.swift"
+    "CaptureService.swift"
     "MenuBarManager.swift"
     "RemoteDetector.swift"
     "RemoteInputHandler.swift"

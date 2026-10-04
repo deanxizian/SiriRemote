@@ -25,6 +25,7 @@ private let chineseStrings: [String: String] = [
 
     // Permissions
     "System Permissions": "系统权限",
+    "Voice Capture in Background": "后台语音采集",
     "Accessibility": "辅助功能",
     "Authorized": "已授权",
     "Authorization Required": "需要授权",

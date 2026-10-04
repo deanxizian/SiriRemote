@@ -29,6 +29,14 @@ jobs:
           plutil -lint app/Resources/zh-Hans.lproj/InfoPlist.strings
           plutil -lint mic/driver/Info.plist mic/driver/CaptureTest-Info.plist
           plutil -lint mic/captured/com.deanxi.siriremote.capture.plist
+      - name: Verify Capture background-item attribution
+        run: |
+          test "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' \
+            mic/captured/com.deanxi.siriremote.capture.plist)" = Contents/Library/LaunchServices/SiriRemoteCapture
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+            app/Info.plist)" = com.deanxi.siriremote
+          bash script/test_capture_bootstrap.sh
+          bash script/test_capture_service.sh
       - name: Compile installer process verifier
         run: |
           xcrun clang -O2 -Wall -Wextra -Werror \
