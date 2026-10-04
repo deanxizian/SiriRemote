@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let settings = config.settings
         voiceCoordinator?.setTarget(settings.voiceTarget)
+        menuBarManager?.updateVoiceTarget(settings.voiceTarget)
         touchHandler?.setTouchEnabled(settings.touchEnabled)
         touchHandler?.cursorSpeed = CGFloat(settings.cursorSpeed)
         touchHandler?.cursorDeadzone = CGFloat(settings.cursorDeadzone)
