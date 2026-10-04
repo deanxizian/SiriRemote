@@ -3,7 +3,7 @@
 Build and verify every component, then create both packages:
 
 ```sh
-dist/build-release.sh 0.3.1
+dist/build-release.sh 0.3.2
 ```
 
 Artifacts are written to `dist/out/`:
@@ -15,19 +15,30 @@ Artifacts are written to `dist/out/`:
 To repeat the package-content and signature audit without rebuilding, pass the same version:
 
 ```sh
-dist/audit-package.sh 0.3.1
+dist/audit-package.sh 0.3.2
 ```
 
 The setup package installs only:
 
 - `/Applications/SiriRemote.app`
+  - `Contents/Library/LaunchServices/SiriRemoteCapture`
+  - `Contents/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist`
 - `/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver`
 - `/Library/Application Support/SiriRemote/`
-- `/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist`
+
+The App's fixed installer entry points register its bundled daemon using `SMAppService` in the
+logged-in console user's session, after the installer verifies the App signature and root ownership.
+System approval still controls whether the daemon may run as root. Upgrades stop and remove the old
+standalone `/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist` and support-directory
+Capture executable. The service label and authenticated IPC requirements remain unchanged.
+Pending/disabled background authorization is not treated as a running service and is not overridden.
+No system-wide background-item reset is performed; macOS may retain obsolete legacy UI records
+until its own maintenance removes them.
 
 The uninstall package removes those components plus SiriRemote user configuration, preferences and
 logs for the current console user. It restores the exact pre-install `HCITraces` value and never
 deletes PacketLogger, SiriRemoteForge, remote-mic-app, `MiRemoteV 2ch` or other audio devices.
+The bundled service is unregistered before deleting the App; legacy installations are also supported.
 
 The App, Capture service, router and HAL are signed with the stable Developer ID Application
 identity. Both PKGs are signed with the matching Developer ID Installer identity and trusted
@@ -49,3 +60,7 @@ Upgrade rollback data is stored in a random, root-owned `0700` directory below
 `/private/var/run/com.deanxi.siriremote-installer/`. Before a rollback is activated, the installer
 revalidates the App, HAL, Capture service and router signatures, checks the LaunchDaemon's fixed
 label and executable path, and rejects writable or symlinked privileged components.
+
+`script/build_and_run.sh --verify` uses the same pre/postinstall and protected rollback in App-only
+mode. It updates the App and embedded Capture, but neither replaces HAL nor restarts coreaudiod.
+Router, HAL and shared-ABI changes still require a Full Setup package.

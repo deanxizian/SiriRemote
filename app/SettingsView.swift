@@ -149,6 +149,15 @@ private struct PermissionSettingsView: View {
                         ? nil
                         : SystemReadiness.openAccessibilitySettings
                 )
+                if model.readiness.captureRequiresApproval {
+                    StatusRow(
+                        title: L("Voice Capture in Background"),
+                        ready: false,
+                        detail: L("Authorization Required"),
+                        actionTitle: L("Open System Settings"),
+                        action: CaptureService.openApprovalSettings
+                    )
+                }
             }
 
             Section(L("Startup")) {

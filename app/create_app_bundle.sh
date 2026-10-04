@@ -4,8 +4,8 @@ cd "$(cd "$(dirname "$0")" && /bin/pwd -P)"
 
 APP_BUNDLE="${SIRIREMOTE_APP_BUNDLE_PATH:-SiriRemote.app}"
 BINARY_PATH="${SIRIREMOTE_BINARY_PATH:-SiriRemote}"
-APP_VERSION="${SIRIREMOTE_VERSION:-0.3.1}"
-BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-24}"
+APP_VERSION="${SIRIREMOTE_VERSION:-0.3.2}"
+BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-26}"
 SIGN_IDENTITY="${SIRIREMOTE_SIGN_IDENTITY:-Developer ID Application: ZIAN XI (96M7FW2XLU)}"
 CODE_SIGN_TIMESTAMP="${SIRIREMOTE_CODESIGN_TIMESTAMP:-none}"
 
@@ -27,6 +27,9 @@ esac
     exit 2
 }
 [ -x "$BINARY_PATH" ] || { echo "missing App executable: $BINARY_PATH" >&2; exit 1; }
+[ -x ../mic/captured/SiriRemoteCapture ] || {
+    echo "Build mic/captured before packaging the App" >&2; exit 1;
+}
 security find-identity -v -p codesigning | grep -Fq "\"$SIGN_IDENTITY\"" || {
     echo "required signing identity is unavailable: $SIGN_IDENTITY" >&2
     exit 1
@@ -34,6 +37,16 @@ security find-identity -v -p codesigning | grep -Fq "\"$SIGN_IDENTITY\"" || {
 
 /bin/rm -rf "$APP_BUNDLE"
 /bin/mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources/Licenses"
+/bin/mkdir -p "$APP_BUNDLE/Contents/Library/LaunchServices" \
+    "$APP_BUNDLE/Contents/Library/LaunchDaemons"
+/bin/cp ../mic/captured/SiriRemoteCapture \
+    "$APP_BUNDLE/Contents/Library/LaunchServices/SiriRemoteCapture"
+/bin/cp ../mic/captured/com.deanxi.siriremote.capture.plist \
+    "$APP_BUNDLE/Contents/Library/LaunchDaemons/"
+# Sign nested code first, with the unchanged IPC identity and Hardened Runtime.
+/usr/bin/codesign --force --options runtime "${CODE_SIGN_TIMESTAMP_ARGS[@]}" \
+    --identifier SiriRemoteCapture --sign "$SIGN_IDENTITY" \
+    "$APP_BUNDLE/Contents/Library/LaunchServices/SiriRemoteCapture"
 /bin/cp "$BINARY_PATH" "$APP_BUNDLE/Contents/MacOS/SiriRemote"
 /bin/cp Info.plist "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" \
@@ -71,7 +84,7 @@ done
 # hardened runtime on current macOS. The helper and HAL plug-in remain hardened separately.
 codesign --force "${CODE_SIGN_TIMESTAMP_ARGS[@]}" --entitlements SiriRemote.entitlements \
     --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
-codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 ACTUAL_ID="$(codesign -d --verbose=4 "$APP_BUNDLE" 2>&1 \
     | /usr/bin/awk -F= '/^Identifier=/{print $2}')"

@@ -4,10 +4,8 @@
 <dict>
     <key>Label</key>
     <string>com.deanxi.siriremote.capture</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/Library/Application Support/SiriRemote/SiriRemoteCapture</string>
-    </array>
+    <key>BundleProgram</key>
+    <string>Contents/Library/LaunchServices/SiriRemoteCapture</string>
     <key>RunAtLoad</key>
     <true/>
     <key>MachServices</key>

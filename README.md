@@ -64,15 +64,15 @@ SiriRemote 只接受 Apple VID `0x004C`、PID `0x0315`。当前版本只接管�
 三个文件：
 
 ```text
-SiriRemote-0.3.1-Full-Setup.pkg
-SiriRemote-0.3.1-Complete-Uninstall.pkg
-SiriRemote-0.3.1-SHA256SUMS.txt
+SiriRemote-0.3.2-Full-Setup.pkg
+SiriRemote-0.3.2-Complete-Uninstall.pkg
+SiriRemote-0.3.2-SHA256SUMS.txt
 ```
 
 先在下载目录核对校验和：
 
 ```sh
-shasum -a 256 -c SiriRemote-0.3.1-SHA256SUMS.txt
+shasum -a 256 -c SiriRemote-0.3.2-SHA256SUMS.txt
 ```
 
 两个 PKG 均显示 `OK` 后再安装 Full Setup。PKG 使用
@@ -220,6 +220,11 @@ PacketLogger 只记录蓝牙 HCI 数据；SiriRemote 重组 ACL/L2CAP/ATT Notifi
 | `SiriRemoteAudioRouter` | 解析 `.pklg`、解码 Opus、写共享 Ring | 不运行 |
 | `SiriRemoteAudio.driver` | 向 CoreAudio 发布 `Siri Remote Mic` | 无生产者时输出静音 |
 
+0.3.2 起 Capture 嵌入 `SiriRemote.app`，通过 `SMAppService` 注册为本应用的后台服务。
+升级自动移除旧的独立 LaunchDaemon；“登录时启动”开关仍单独控制 App，不影响 Capture 注册。
+若系统要求重新授权，请在“系统设置 → 通用 → 登录项与扩展”允许 SiriRemote，权限页也会
+显示对应入口。系统可能暂时保留旧的开发者名称记录，等待 macOS 清理即可，无需重置其他 App 的后台记录。
+
 PacketLogger 和音频路由器只在真实 Siri 语音会话有 demand 时启动。仅仅打开语音工具、枚举
 虚拟麦克风或保持 SiriRemote 空闲，不应启动采集链路。
 
@@ -285,7 +290,7 @@ pgrep -fl 'SiriRemote|packetlogger|SiriRemoteAudioRouter|SiriRemoteCapture'
 双击：
 
 ```text
-SiriRemote-0.3.1-Complete-Uninstall.pkg
+SiriRemote-0.3.2-Complete-Uninstall.pkg
 ```
 
 卸载包会删除 SiriRemote App、HAL 驱动、Capture 服务、LaunchDaemon、当前控制台用户的
@@ -300,16 +305,16 @@ SiriRemote-0.3.1-Complete-Uninstall.pkg
 ### 完整本地安装包
 
 ```sh
-dist/build-release.sh 0.3.1
+dist/build-release.sh 0.3.2
 ```
 
 该命令会运行 Core、实际语音协调器及按键编码回归，构建 App、路由器、HAL 和 Capture 服务，完成签名、打包与
 内容审计。输出位于 `dist/out/`：
 
 ```text
-SiriRemote-0.3.1-Full-Setup.pkg
-SiriRemote-0.3.1-Complete-Uninstall.pkg
-SiriRemote-0.3.1-SHA256SUMS.txt
+SiriRemote-0.3.2-Full-Setup.pkg
+SiriRemote-0.3.2-Complete-Uninstall.pkg
+SiriRemote-0.3.2-SHA256SUMS.txt
 ```
 
 ### 本机开发验证
@@ -324,7 +329,8 @@ SiriRemote-0.3.1-SHA256SUMS.txt
 实时测试只使用 `/Applications/SiriRemote.app`，不要直接运行 `app/SiriRemote.app` 或其他
 项目内 bundle，以免 TCC 权限、进程状态和实际测试版本不一致。
 
-该开发入口只更新 App。修改 Capture、Router、HAL 或共享 ABI 时，必须构建并安装完整包。
+该开发入口更新 App 及内置 Capture，并迁移旧服务，不重启 CoreAudio。
+修改 Router、HAL 或共享 ABI 时，必须构建并安装完整包。
 CI 同时覆盖实际语音会话状态机、豆包右 Command / Typeless Fn 手势、Capture 身份校验、Router/解析器、HAL 多客户端 I/O，
 以及 ASan/UBSan 下的冷启动挂接、失效会话静音和尾音排空；不代替遥控器与语音工具的实机验收。
 

@@ -16,6 +16,7 @@ struct SystemReadinessSnapshot: Equatable {
     let hidInputAvailable: Bool
     let driverInstalled: Bool
     let captureServiceStatus: InstalledServiceStatus
+    let captureRequiresApproval: Bool
     let packetLoggerInstalled: Bool
     let doubaoInputSourceStatus: DoubaoInputSourceStatus
     let typelessStatus: TypelessStatus
@@ -29,7 +30,6 @@ enum SystemReadiness {
         "com.deanxi.siriremote.capture-service"
     static let driverPath = "/Library/Audio/Plug-Ins/HAL/SiriRemoteAudio.driver"
     static let supportPath = "/Library/Application Support/SiriRemote"
-    static let capturePlistPath = "/Library/LaunchDaemons/com.deanxi.siriremote.capture.plist"
     static let packetLoggerPath =
         "/Applications/PacketLogger.app/Contents/Resources/packetlogger"
 
@@ -43,13 +43,15 @@ enum SystemReadiness {
 
     static func snapshot() -> SystemReadinessSnapshot {
         let fm = FileManager.default
+        let bundlePath = Bundle.main.bundleURL.path
+        let registration = CaptureService.status
         let captureComponentsInstalled =
-            fm.isExecutableFile(atPath: supportPath + "/SiriRemoteCapture")
+            fm.isExecutableFile(atPath: bundlePath + "/" + CaptureService.executableRelativePath)
             && fm.isExecutableFile(atPath: supportPath + "/SiriRemoteAudioRouter")
-            && fm.fileExists(atPath: capturePlistPath)
+            && fm.fileExists(atPath: bundlePath + "/" + CaptureService.plistRelativePath)
         let captureStatus = InstalledServiceHealth.resolve(
             componentsInstalled: captureComponentsInstalled,
-            advertisedPID: captureServicePID(),
+            advertisedPID: registration == .enabled ? captureServicePID() : nil,
             isProcessAlive: processIsAlive
         )
         let doubao = DoubaoInputSourceCoordinator()
@@ -68,6 +70,7 @@ enum SystemReadiness {
                 == kIOHIDAccessTypeGranted,
             driverInstalled: fm.fileExists(atPath: driverPath),
             captureServiceStatus: captureStatus,
+            captureRequiresApproval: registration == .requiresApproval,
             packetLoggerInstalled: fm.isExecutableFile(atPath: packetLoggerPath),
             doubaoInputSourceStatus: doubaoStatus,
             typelessStatus: TypelessIntegration.status

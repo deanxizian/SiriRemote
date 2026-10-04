@@ -10,8 +10,8 @@ DRIVER="SiriRemoteAudio.driver"
 EXE="SiriRemoteAudio"
 CAPTURE_APP="SiriRemoteMicCaptureTest.app"
 MACOS_MIN="${SIRIREMOTE_MACOS_MIN:-13.0}"
-DRIVER_VERSION="${SIRIREMOTE_VERSION:-0.3.1}"
-BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-24}"
+DRIVER_VERSION="${SIRIREMOTE_VERSION:-0.3.2}"
+BUILD_NUMBER="${SIRIREMOTE_BUILD_NUMBER:-26}"
 DRIVER_SIGN_IDENTITY="${SIRIREMOTE_SIGN_IDENTITY:-Developer ID Application: ZIAN XI (96M7FW2XLU)}"
 # Optional stable signing identity for the capture-test app (keeps its microphone TCC grant across
 # rebuilds). Set SRM_CAPTURE_SIGN_IDENTITY to your own "Apple Development: …" identity; unset → ad-hoc.
